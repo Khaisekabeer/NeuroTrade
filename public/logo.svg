@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Neuro Trade logo — candlestick chart forming an upward trend,
+     merged with a neural network node motif. Emerald + zinc palette. -->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="nd-grad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="nd-grad-2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#064e3b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded square background -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#0a0a0b" stroke="#27272a" stroke-width="1.5"/>
+
+  <!-- neural network connection lines (subtle, behind candles) -->
+  <g stroke="#3f3f46" stroke-width="1" opacity="0.55">
+    <line x1="12" y1="20" x2="22" y2="28"/>
+    <line x1="12" y1="44" x2="22" y2="28"/>
+    <line x1="22" y1="28" x2="34" y2="36"/>
+    <line x1="34" y1="36" x2="46" y2="22"/>
+    <line x1="34" y1="36" x2="46" y2="44"/>
+    <line x1="46" y1="22" x2="54" y2="16"/>
+    <line x1="46" y1="44" x2="54" y2="48"/>
+  </g>
+
+  <!-- input nodes (left) -->
+  <circle cx="12" cy="20" r="2.5" fill="#52525b"/>
+  <circle cx="12" cy="44" r="2.5" fill="#52525b"/>
+
+  <!-- hidden node (center) -->
+  <circle cx="34" cy="36" r="3" fill="#10b981" opacity="0.85"/>
+
+  <!-- output node (top right) — the "buy" signal -->
+  <circle cx="54" cy="16" r="3.5" fill="url(#nd-grad)"/>
+  <circle cx="54" cy="16" r="5.5" fill="none" stroke="#34d399" stroke-width="0.8" opacity="0.4"/>
+
+  <!-- candlesticks forming an upward trend -->
+  <!-- candle 1 (down) -->
+  <line x1="22" y1="24" x2="22" y2="40" stroke="#10b981" stroke-width="1.5"/>
+  <rect x="20" y="28" width="4" height="8" fill="#10b981" rx="0.5"/>
+
+  <!-- candle 2 (up) -->
+  <line x1="32" y1="20" x2="32" y2="38" stroke="url(#nd-grad-2)" stroke-width="1.5"/>
+  <rect x="30" y="24" width="4" height="10" fill="url(#nd-grad-2)" rx="0.5"/>
+
+  <!-- candle 3 (up, taller) -->
+  <line x1="42" y1="14" x2="42" y2="34" stroke="url(#nd-grad)" stroke-width="1.5"/>
+  <rect x="40" y="18" width="4" height="12" fill="url(#nd-grad)" rx="0.5"/>
+
+  <!-- upward trend arrow -->
+  <path d="M 16 48 L 28 42 L 40 34 L 50 24" stroke="#34d399" stroke-width="1.2" fill="none" stroke-dasharray="2 2" opacity="0.7" stroke-linecap="round"/>
+  <path d="M 46 24 L 50 24 L 50 28" stroke="#34d399" stroke-width="1.2" fill="none" opacity="0.7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

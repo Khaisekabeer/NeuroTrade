@@ -1,0 +1,93 @@
+// Prisma schema for the Multi-Agent Crypto Trading Bot
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// OHLCV candles persisted for backtest / chart history
+model Candle {
+  id        String   @id @default(cuid())
+  symbol    String   // e.g. BTC/USDT
+  timeframe String   // e.g. 1m
+  openTime  DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float
+  createdAt DateTime @default(now())
+
+  @@unique([symbol, timeframe, openTime])
+  @@index([symbol, openTime])
+}
+
+// A filled (or simulated) trade
+model Trade {
+  id          String   @id @default(cuid())
+  symbol      String
+  side        String   // LONG | SHORT
+  size        Float    // base asset qty
+  entryPrice  Float
+  exitPrice   Float?
+  status      String   // OPEN | CLOSED
+  pnl         Float?
+  pnlPct      Float?
+  stopLoss    Float
+  takeProfit  Float
+  confidence  Float    // orchestrator confidence 0..1
+  rationale   String   // LLM rationale
+  openedAt    DateTime @default(now())
+  closedAt    DateTime?
+}
+
+// Current open position (one per symbol)
+model Position {
+  id         String   @id @default(cuid())
+  symbol     String   @unique
+  side       String
+  size       Float
+  entryPrice Float
+  stopLoss   Float
+  takeProfit Float
+  unrealized Float
+  openedAt   DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Every agent's individual output + orchestrator decision
+model AgentDecision {
+  id         String   @id @default(cuid())
+  symbol     String
+  cycle      Int      // orchestrator cycle number
+  agent      String   // SENTIMENT | TECHNICAL | ML | RISK | ORCHESTRATOR
+  signal     String   // LONG | SHORT | FLAT | HOLD
+  confidence Float
+  detail     String   // JSON blob: indicators, sentiment, nn output etc.
+  rationale  String
+  createdAt  DateTime @default(now())
+  @@index([symbol, cycle])
+}
+
+// Equity curve snapshots
+model PortfolioSnapshot {
+  id        String   @id @default(cuid())
+  equity    Float
+  cash      Float
+  exposure  Float
+  openPnl   Float
+  createdAt DateTime @default(now())
+}
+
+model RiskSettings {
+  id              String  @id @default("default")
+  maxRiskPerTrade Float   @default(0.02)   // 2% of equity
+  maxTotalExposure Float  @default(0.6)    // 60% of equity
+  maxDrawdown     Float   @default(0.15)   // 15%
+  leverageCap     Float   @default(5)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}

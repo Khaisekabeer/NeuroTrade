@@ -1,0 +1,558 @@
+// In-memory trading state singleton shared across Next.js API routes + agent engine.
+// The market microservice (mini-services/market-data, port 3003) is the single
+// source of truth for prices. This module subscribes to it as a socket.io client,
+// maintains rolling candle buffers + portfolio + positions + trades, and exposes
+// synchronous getters for API routes. If the WS service is unreachable, it falls
+// back to generating a local price feed so the dashboard always works.
+
+import { io } from 'socket.io-client'
+import { db } from './db'
+import type {
+  Candle, Position, Trade, Portfolio, RiskSettings, OrchestratorDecision,
+  AgentOutput, Signal, TradeSide,
+} from './types'
+import { TRADE_SYMBOLS } from './types'
+import { placeMarketEntry, placeStopOrder, cancelOrder, fetchLiveTickers, fetchLiveKlines } from './bitget-executor'
+
+export type TradingMode = 'paper' | 'live'
+
+const MAX_CANDLES = 300
+const MARKET_URL = 'http://localhost:3003' // internal — only used server-side
+
+interface State {
+  candles: Map<string, Candle[]>
+  ticks: Map<string, { price: number; ts: number; bid: number; ask: number; volume24h: number; change24h: number }>
+  portfolio: Portfolio
+  positions: Map<string, Position & { liveEntryOrderId?: string; liveSlOrderId?: string; liveTpOrderId?: string }>
+  trades: Trade[]
+  decisions: OrchestratorDecision[]
+  agentOutputs: Map<string, AgentOutput[]> // symbol -> recent agent outputs
+  risk: RiskSettings
+  startedAt: number
+  dayStartEquity: number
+  peakEquity: number
+  cycle: number
+  connected: boolean
+  mode: TradingMode
+  livePriceTimer: NodeJS.Timeout | null
+  liveTickerLoaded: boolean
+}
+
+function seedPrices(): Map<string, { price: number; ts: number; bid: number; ask: number; volume24h: number; change24h: number }> {
+  const m = new Map<string, State['ticks'] extends Map<string, infer V> ? V : never>()
+  for (const s of TRADE_SYMBOLS) {
+    m.set(s.symbol, {
+      price: s.price,
+      ts: Date.now(),
+      bid: s.price * 0.9999,
+      ask: s.price * 1.0001,
+      volume24h: 1.2e9,
+      change24h: 0,
+    })
+  }
+  return m
+}
+
+function seedCandles(): Map<string, Candle[]> {
+  const m = new Map<string, Candle[]>()
+  for (const s of TRADE_SYMBOLS) {
+    const arr: Candle[] = []
+    let price = s.price * 0.985
+    const now = Date.now()
+    for (let i = MAX_CANDLES - 1; i >= 0; i--) {
+      const open = price
+      const drift = (Math.random() - 0.48) * s.price * 0.002
+      const close = Math.max(0.01, open + drift)
+      const high = Math.max(open, close) * (1 + Math.random() * 0.0015)
+      const low = Math.min(open, close) * (1 - Math.random() * 0.0015)
+      const volume = (1e6 + Math.random() * 5e6) * (s.base === 'BTC' ? 1 : s.base === 'ETH' ? 5 : 50)
+      arr.push({
+        symbol: s.symbol, timeframe: '1m',
+        openTime: now - i * 60_000,
+        open, high, low, close, volume,
+      })
+      price = close
+    }
+    m.set(s.symbol, arr)
+  }
+  return m
+}
+
+// IMPORTANT: hoist state to globalThis so HMR in dev mode does not split the
+// module instance between instrumentation (which starts the engine) and the
+// API routes (which read state). Without this, the dashboard would see a fresh
+// empty state separate from the one the engine is writing to.
+const g = globalThis as unknown as { __ND_STATE__?: State; __ND_SOCKET__?: any; __ND_FALLBACK__?: NodeJS.Timeout | null }
+const state: State = (g.__ND_STATE__ ??= {
+  candles: seedCandles(),
+  ticks: seedPrices(),
+  portfolio: {
+    cash: 100_000,
+    equity: 100_000,
+    exposure: 0,
+    openPnl: 0,
+    realizedPnl: 0,
+    dayPnl: 0,
+    dayPnlPct: 0,
+    winRate: 0,
+  },
+  positions: new Map(),
+  trades: [],
+  decisions: [],
+  agentOutputs: new Map(),
+  risk: {
+    maxRiskPerTrade: 0.02,
+    maxTotalExposure: 0.6,
+    maxDrawdown: 0.15,
+    leverageCap: 5,
+  },
+  startedAt: Date.now(),
+  dayStartEquity: 100_000,
+  peakEquity: 100_000,
+  cycle: 0,
+  connected: false,
+  mode: 'paper',
+  livePriceTimer: null,
+  liveTickerLoaded: false,
+})
+
+// wire up socket client to market microservice (also globalThis-guarded)
+let socket: ReturnType<typeof io> | null = g.__ND_SOCKET__ ?? null
+let fallbackTimer: NodeJS.Timeout | null = g.__ND_FALLBACK__ ?? null
+
+function startFallback() {
+  if (fallbackTimer) return
+  // generate ticks locally every 1.5s so the dashboard keeps working
+  g.__ND_FALLBACK__ = fallbackTimer = setInterval(() => {
+    for (const s of TRADE_SYMBOLS) {
+      const t = state.ticks.get(s.symbol)!
+      const drift = (Math.random() - 0.5) * t.price * 0.0015
+      const newPrice = Math.max(0.01, t.price + drift)
+      applyTick(s.symbol, newPrice)
+    }
+  }, 1500)
+}
+
+function stopFallback() {
+  if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; g.__ND_FALLBACK__ = null }
+}
+
+function applyTick(symbol: string, price: number) {
+  const t = state.ticks.get(symbol)
+  if (!t) return
+  const prev = t.price
+  t.price = price
+  t.ts = Date.now()
+  t.bid = price * 0.9999
+  t.ask = price * 1.0001
+  t.change24h = ((price - prev) / prev) * 100 + t.change24h * 0.999
+  // update last candle close/high/low
+  const arr = state.candles.get(symbol)
+  if (arr && arr.length) {
+    const last = arr[arr.length - 1]
+    last.close = price
+    last.high = Math.max(last.high, price)
+    last.low = Math.min(last.low, price)
+    last.volume += Math.random() * 1000
+  }
+  updateUnrealized()
+}
+
+function pushNewCandle(c: Candle) {
+  const arr = state.candles.get(c.symbol)
+  if (!arr) return
+  arr.push(c)
+  if (arr.length > MAX_CANDLES) arr.shift()
+}
+
+// ---- LIVE PRICE POLLING (real Bitget public API) ----
+// When mode='live', we poll Bitget's public ticker endpoint every 2s and
+// update the in-memory ticks + last candle. This replaces both the simulated
+// microservice AND the local fallback generator.
+async function pollLivePrices() {
+  const symbols = TRADE_SYMBOLS.map((s) => s.symbol)
+  const ticks = await fetchLiveTickers(symbols)
+  for (const t of ticks) {
+    applyTick(t.symbol, t.price)
+    // also update the tick's volume + change fields
+    const existing = state.ticks.get(t.symbol)
+    if (existing) {
+      existing.volume24h = t.volume24h
+      existing.change24h = t.change24h
+    }
+  }
+  state.connected = true
+}
+
+async function startLivePricePolling() {
+  if (state.livePriceTimer) return
+  // bootstrap candle history from Bitget once
+  if (!state.liveTickerLoaded) {
+    state.liveTickerLoaded = true
+    for (const s of TRADE_SYMBOLS) {
+      const klines = await fetchLiveKlines(s.symbol, 200)
+      if (klines.length) {
+        const candles: Candle[] = klines.map((k) => ({
+          symbol: s.symbol, timeframe: '1m',
+          openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume,
+        }))
+        state.candles.set(s.symbol, candles.slice(-MAX_CANDLES))
+      }
+    }
+    console.log('[trading-state] live mode: bootstrapped candle history from Bitget')
+  }
+  // initial poll
+  pollLivePrices().catch(() => {})
+  // then every 2s
+  state.livePriceTimer = setInterval(() => { pollLivePrices().catch(() => {}) }, 2000)
+  console.log('[trading-state] live mode: polling real Bitget prices every 2s')
+}
+
+function stopLivePricePolling() {
+  if (state.livePriceTimer) { clearInterval(state.livePriceTimer); state.livePriceTimer = null }
+}
+
+// ---- MODE SWITCH (paper <-> live) ----
+export async function setMode(mode: TradingMode) {
+  if (state.mode === mode) return
+  if (mode === 'live') {
+    // switching to live: stop simulated feed, start real polling
+    stopFallback()
+    if (socket) { try { socket.disconnect() } catch {} socket = null; g.__ND_SOCKET__ = null }
+    state.mode = 'live'
+    startLivePricePolling()
+    console.log('[trading-state] switched to LIVE mode — real Bitget prices + real orders')
+  } else {
+    // switching to paper: stop live polling, reconnect simulated feed
+    stopLivePricePolling()
+    state.mode = 'paper'
+    state.connected = false
+    connectMarket()
+    console.log('[trading-state] switched to PAPER mode — simulated prices')
+  }
+}
+
+export function getMode(): TradingMode { return state.mode }
+
+export function isLiveConfigured(): boolean {
+  return !!(process.env.BITGET_API_KEY && process.env.BITGET_API_SECRET && process.env.BITGET_API_PASSPHRASE)
+}
+
+export function connectMarket() {
+  // In LIVE mode, skip the simulated microservice and poll real Bitget prices.
+  if (state.mode === 'live') { startLivePricePolling(); return }
+  if (socket) return
+  try {
+    socket = io(MARKET_URL, { path: '/', transports: ['websocket'], reconnection: true, reconnectionAttempts: Infinity, timeout: 3000 })
+    g.__ND_SOCKET__ = socket
+    socket.on('connect', () => { state.connected = true; stopFallback() })
+    socket.on('disconnect', () => { state.connected = false; startFallback() })
+    socket.on('tick', (t: { symbol: string; price: number }) => applyTick(t.symbol, t.price))
+    socket.on('candle', (c: Candle) => {
+      // replace last candle if same openTime else push
+      const arr = state.candles.get(c.symbol)
+      if (arr && arr.length && arr[arr.length - 1].openTime === c.openTime) {
+        arr[arr.length - 1] = c
+      } else {
+        pushNewCandle(c)
+      }
+      const t = state.ticks.get(c.symbol)
+      if (t) { t.price = c.close; t.ts = Date.now() }
+      updateUnrealized()
+    })
+    socket.on('history', (data: { symbol: string; candles: Candle[] }) => {
+      if (data.candles?.length) state.candles.set(data.symbol, data.candles.slice(-MAX_CANDLES))
+    })
+    // request history
+    socket.on('connect', () => {
+      for (const s of TRADE_SYMBOLS) socket?.emit('get-history', { symbol: s.symbol })
+    })
+    // if no connect in 3s, fallback
+    setTimeout(() => { if (!state.connected) startFallback() }, 3000)
+  } catch {
+    startFallback()
+  }
+}
+
+function updateUnrealized() {
+  let openPnl = 0
+  let exposure = 0
+  for (const pos of state.positions.values()) {
+    const t = state.ticks.get(pos.symbol)
+    const price = t?.price ?? pos.entryPrice
+    const pnl = pos.side === 'LONG'
+      ? (price - pos.entryPrice) * pos.size
+      : (pos.entryPrice - price) * pos.size
+    pos.unrealized = pnl
+    openPnl += pnl
+    exposure += pos.size * price
+  }
+  state.portfolio.openPnl = openPnl
+  state.portfolio.equity = state.portfolio.cash + openPnl
+  state.portfolio.exposure = state.portfolio.equity > 0 ? exposure / state.portfolio.equity : 0
+  if (state.portfolio.equity > state.peakEquity) state.peakEquity = state.portfolio.equity
+  state.portfolio.dayPnl = state.portfolio.equity - state.dayStartEquity
+  state.portfolio.dayPnlPct = state.dayStartEquity > 0 ? state.portfolio.dayPnl / state.dayStartEquity : 0
+}
+
+// ---- Trading mutations (called by the agent engine) ----
+
+export async function openPosition(symbol: string, side: TradeSide, size: number, stopLoss: number, takeProfit: number, confidence: number, rationale: string): Promise<Trade | null> {
+  const t = state.ticks.get(symbol)
+  if (!t) return null
+  const price = side === 'LONG' ? t.ask : t.bid
+  // Derivatives/margin model: cash is collateral, not debited by notional.
+  // Margin check: total notional after this trade must fit equity * leverageCap.
+  updateUnrealized()
+  const equity = state.portfolio.equity
+  if (equity <= 0) return null
+  let currentNotional = 0
+  for (const p of state.positions.values()) {
+    const px = state.ticks.get(p.symbol)?.price ?? p.entryPrice
+    currentNotional += p.size * px
+  }
+  const availableNotional = equity * state.risk.leverageCap - currentNotional
+  if (availableNotional <= 0) return null
+  let notional = size * price
+  if (notional > availableNotional) {
+    size = availableNotional / price
+    notional = size * price
+    if (size <= 0) return null
+  }
+
+  // ---- LIVE MODE: place real orders on Bitget ----
+  let liveEntryOrderId: string | undefined
+  let liveSlOrderId: string | undefined
+  let liveTpOrderId: string | undefined
+  if (state.mode === 'live' && isLiveConfigured()) {
+    // 1. market entry order
+    const entry = await placeMarketEntry(symbol, side, size)
+    if (!entry.ok) {
+      console.error('[live] entry order failed:', entry.error)
+      return null
+    }
+    liveEntryOrderId = entry.orderId
+    // 2. exchange-side stop-loss (reduce-only trigger)
+    const sl = await placeStopOrder(symbol, side, size, stopLoss, 'sl')
+    if (sl.ok) liveSlOrderId = sl.orderId
+    else console.warn('[live] SL plan order failed:', sl.error)
+    // 3. exchange-side take-profit (reduce-only trigger)
+    const tp = await placeStopOrder(symbol, side, size, takeProfit, 'tp')
+    if (tp.ok) liveTpOrderId = tp.orderId
+    else console.warn('[live] TP plan order failed:', tp.error)
+    console.log(`[live] opened ${side} ${symbol} size=${size} entry=${liveEntryOrderId} sl=${liveSlOrderId} tp=${liveTpOrderId}`)
+  }
+
+  // cash is NOT debited (margin model); equity = cash + unrealized
+  const pos: Position & { liveEntryOrderId?: string; liveSlOrderId?: string; liveTpOrderId?: string } = {
+    symbol, side, size, entryPrice: price, stopLoss, takeProfit, unrealized: 0, openedAt: Date.now(),
+    liveEntryOrderId, liveSlOrderId, liveTpOrderId,
+  }
+  state.positions.set(symbol, pos)
+  const trade: Trade = {
+    id: Math.random().toString(36).slice(2, 10),
+    symbol, side, size, entryPrice: price, exitPrice: null, status: 'OPEN',
+    pnl: null, pnlPct: null, stopLoss, takeProfit, confidence, rationale,
+    openedAt: Date.now(), closedAt: null,
+  }
+  state.trades.unshift(trade)
+  if (state.trades.length > 200) state.trades.pop()
+  // persist
+  db.trade.create({ data: {
+    symbol, side, size, entryPrice: price, status: 'OPEN',
+    stopLoss, takeProfit, confidence, rationale,
+  } }).catch(() => {})
+  db.position.upsert({ where: { symbol }, create: { symbol, side, size, entryPrice: price, stopLoss, takeProfit, unrealized: 0 }, update: { symbol, side, size, entryPrice: price, stopLoss, takeProfit, unrealized: 0 } }).catch(() => {})
+  updateUnrealized()
+  return trade
+}
+
+export async function closePosition(symbol: string, reason: string): Promise<Trade | null> {
+  const pos = state.positions.get(symbol)
+  if (!pos) return null
+  const t = state.ticks.get(symbol)
+  const price = pos.side === 'LONG' ? (t?.bid ?? pos.entryPrice) : (t?.ask ?? pos.entryPrice)
+
+  // ---- LIVE MODE: cancel exchange-side SL/TP orders, then place closing market order ----
+  if (state.mode === 'live' && isLiveConfigured()) {
+    // cancel the SL + TP plan orders so they don't trigger after we've closed
+    if (pos.liveSlOrderId) { await cancelOrder(symbol, pos.liveSlOrderId) }
+    if (pos.liveTpOrderId) { await cancelOrder(symbol, pos.liveTpOrderId) }
+    // place a market close order (opposite side)
+    const closeSide = pos.side === 'LONG' ? 'SHORT' : 'LONG'
+    await placeMarketEntry(symbol, closeSide, pos.size)
+    console.log(`[live] closed ${pos.side} ${symbol} reason=${reason}`)
+  }
+
+  const pnl = pos.side === 'LONG' ? (price - pos.entryPrice) * pos.size : (pos.entryPrice - price) * pos.size
+  // margin model: only the realized P/L settles into cash (notional was never debited)
+  state.portfolio.cash += pnl
+  state.portfolio.realizedPnl += pnl
+  state.positions.delete(symbol)
+  // update trade
+  const trade = state.trades.find((tr) => tr.symbol === symbol && tr.status === 'OPEN')
+  if (trade) {
+    trade.status = 'CLOSED'
+    trade.exitPrice = price
+    trade.pnl = pnl
+    trade.pnlPct = pos.entryPrice > 0 ? pnl / (pos.size * pos.entryPrice) : 0
+    trade.closedAt = Date.now()
+    db.trade.updateMany({ where: { id: trade.id }, data: { status: 'CLOSED', exitPrice: price, pnl, pnlPct: trade.pnlPct, closedAt: new Date() } }).catch(() => {})
+  }
+  db.position.deleteMany({ where: { symbol } }).catch(() => {})
+  updateUnrealized()
+  // win rate
+  const closed = state.trades.filter((tr) => tr.status === 'CLOSED')
+  const wins = closed.filter((tr) => (tr.pnl ?? 0) > 0).length
+  state.portfolio.winRate = closed.length ? wins / closed.length : 0
+  return trade
+}
+
+// check stops/takes on each tick — returns closed trades
+// In live mode, the EXCHANGE-side plan orders handle SL/TP directly, so this
+// function is mostly a paper-mode safety net + a sync mechanism. It still runs
+// so the dashboard reflects closures promptly when a soft SL/TP would trigger.
+export async function checkExits(): Promise<string[]> {
+  const closed: string[] = []
+  for (const pos of state.positions.values()) {
+    const t = state.ticks.get(pos.symbol)
+    if (!t) continue
+    const price = t.price
+    const hitSL = pos.side === 'LONG' ? price <= pos.stopLoss : price >= pos.stopLoss
+    const hitTP = pos.side === 'LONG' ? price >= pos.takeProfit : price <= pos.takeProfit
+    if (hitSL) { await closePosition(pos.symbol, 'stop-loss'); closed.push(pos.symbol) }
+    else if (hitTP) { await closePosition(pos.symbol, 'take-profit'); closed.push(pos.symbol) }
+  }
+  return closed
+}
+
+export function recordDecision(d: OrchestratorDecision) {
+  state.decisions.unshift(d)
+  if (state.decisions.length > 100) state.decisions.pop()
+  state.cycle = d.cycle
+  // persist orchestrator + each agent decision
+  db.agentDecision.create({ data: { symbol: d.symbol, cycle: d.cycle, agent: 'ORCHESTRATOR', signal: d.signal, confidence: d.confidence, detail: JSON.stringify({ size: d.size, stopLoss: d.stopLoss, takeProfit: d.takeProfit }), rationale: d.rationale } }).catch(() => {})
+  for (const a of d.agents) {
+    db.agentDecision.create({ data: { symbol: d.symbol, cycle: d.cycle, agent: a.agent, signal: a.signal, confidence: a.confidence, detail: JSON.stringify(a.detail), rationale: a.rationale } }).catch(() => {})
+    const list = state.agentOutputs.get(d.symbol) ?? []
+    list.unshift(a)
+    if (list.length > 50) list.pop()
+    state.agentOutputs.set(d.symbol, list)
+  }
+}
+
+export function snapshotPortfolio(): Portfolio & { positions: Position[]; startedAt: number; peakEquity: number; drawdown: number; cycle: number; connected: boolean } {
+  updateUnrealized()
+  const dd = state.peakEquity > 0 ? (state.peakEquity - state.portfolio.equity) / state.peakEquity : 0
+  return { ...state.portfolio, positions: Array.from(state.positions.values()), startedAt: state.startedAt, peakEquity: state.peakEquity, drawdown: dd, cycle: state.cycle, connected: state.connected }
+}
+
+export function getTrades(limit = 50): Trade[] { return state.trades.slice(0, limit) }
+export function getDecisions(limit = 30): OrchestratorDecision[] { return state.decisions.slice(0, limit) }
+export function getAgentOutputs(symbol: string, limit = 20): AgentOutput[] { return (state.agentOutputs.get(symbol) ?? []).slice(0, limit) }
+export function getCandles(symbol: string, limit = 200): Candle[] { return (state.candles.get(symbol) ?? []).slice(-limit) }
+export function getTicks() { return Array.from(state.ticks.entries()).map(([symbol, t]) => ({ symbol, ...t })) }
+export function getRisk(): RiskSettings { return state.risk }
+export function setRisk(r: Partial<RiskSettings>) { state.risk = { ...state.risk, ...r } }
+export function getCycle() { return state.cycle }
+export function bumpCycle() { state.cycle++; return state.cycle }
+
+// CRITICAL for robustness: restore open positions + cash + realized P/L from
+// the database on startup so a process restart (wifi drop, crash, reboot,
+// redeploy) does NOT silently wipe your open trades. Without this, the
+// in-memory state would seed fresh ($100k, no positions) on every restart
+// while the DB still held the real open positions — a dangerous mismatch.
+export async function restoreFromDb() {
+  try {
+    // 1. reload open positions into memory
+    const dbPositions = await db.position.findMany()
+    for (const p of dbPositions) {
+      state.positions.set(p.symbol, {
+        symbol: p.symbol,
+        side: p.side as TradeSide,
+        size: p.size,
+        entryPrice: p.entryPrice,
+        stopLoss: p.stopLoss,
+        takeProfit: p.takeProfit,
+        unrealized: 0,
+        openedAt: p.openedAt.getTime(),
+      })
+    }
+    // 2. reload recent trades (open + closed) for the trade-history panel
+    const dbTrades = await db.trade.findMany({ orderBy: { openedAt: 'desc' }, take: 200 })
+    state.trades = dbTrades.map((t) => ({
+      id: t.id,
+      symbol: t.symbol,
+      side: t.side as TradeSide,
+      size: t.size,
+      entryPrice: t.entryPrice,
+      exitPrice: t.exitPrice,
+      status: t.status as TradeStatus,
+      pnl: t.pnl,
+      pnlPct: t.pnlPct,
+      stopLoss: t.stopLoss,
+      takeProfit: t.takeProfit,
+      confidence: t.confidence,
+      rationale: t.rationale,
+      openedAt: t.openedAt.getTime(),
+      closedAt: t.closedAt ? t.closedAt.getTime() : null,
+    }))
+    // 3. recompute realized P/L + win rate from closed trades
+    const closed = state.trades.filter((t) => t.status === 'CLOSED')
+    state.portfolio.realizedPnl = closed.reduce((s, t) => s + (t.pnl ?? 0), 0)
+    const wins = closed.filter((t) => (t.pnl ?? 0) > 0).length
+    state.portfolio.winRate = closed.length ? wins / closed.length : 0
+    // 4. cash = starting capital + realized P/L (margin model: cash only
+    //    changes by realized P/L, not by opening positions)
+    state.portfolio.cash = 100_000 + state.portfolio.realizedPnl
+    // 5. restore the cycle counter from the latest agent decision
+    const lastDecision = await db.agentDecision.findFirst({ orderBy: { createdAt: 'desc' } })
+    if (lastDecision) state.cycle = lastDecision.cycle
+    // 6. restore risk settings
+    const riskRow = await db.riskSettings.findUnique({ where: { id: 'default' } })
+    if (riskRow) {
+      state.risk = {
+        maxRiskPerTrade: riskRow.maxRiskPerTrade,
+        maxTotalExposure: riskRow.maxTotalExposure,
+        maxDrawdown: riskRow.maxDrawdown,
+        leverageCap: riskRow.leverageCap,
+      }
+    }
+    updateUnrealized()
+    if (state.positions.size > 0) {
+      console.log(`[trading-state] restored ${state.positions.size} open position(s) + ${state.trades.length} trade(s) from DB`)
+    }
+  } catch (e) {
+    console.error('[trading-state] restoreFromDb failed:', (e as Error).message)
+  }
+}
+
+// manual override (for UI controls)
+export async function manualClose(symbol: string) { return closePosition(symbol, 'manual') }
+export async function manualOpen(symbol: string, side: TradeSide, riskPct: number) {
+  const t = state.ticks.get(symbol)
+  if (!t) return null
+  const price = side === 'LONG' ? t.ask : t.bid
+  const riskAmt = state.portfolio.equity * riskPct
+  const stopDist = price * 0.01
+  const size = riskAmt / stopDist
+  const sl = side === 'LONG' ? price - stopDist : price + stopDist
+  const tp = side === 'LONG' ? price + stopDist * 2 : price - stopDist * 2
+  return openPosition(symbol, side, size, sl, tp, 1, 'Manual override by operator')
+}
+
+export function resetPaperAccount() {
+  state.positions.clear()
+  state.trades = []
+  state.decisions = []
+  state.agentOutputs.clear()
+  state.portfolio = { cash: 100_000, equity: 100_000, exposure: 0, openPnl: 0, realizedPnl: 0, dayPnl: 0, dayPnlPct: 0, winRate: 0 }
+  state.peakEquity = 100_000
+  state.dayStartEquity = 100_000
+  state.cycle = 0
+  db.trade.deleteMany({}).catch(() => {})
+  db.position.deleteMany({}).catch(() => {})
+  db.agentDecision.deleteMany({}).catch(() => {})
+}
+
+export type { Signal }
