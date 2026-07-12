@@ -29,7 +29,12 @@ export interface LiveOrderResult {
 }
 
 async function postBitget(body: any): Promise<any> {
-  const res = await fetch('/api/bitget', {
+  // This runs server-side (Node.js), so we need an absolute URL.
+  // Relative URLs like '/api/bitget' only work in the browser.
+  const baseUrl = process.env.NODE_ENV === 'production'
+    ? `http://localhost:${process.env.PORT || 3000}`
+    : 'http://localhost:3000'
+  const res = await fetch(`${baseUrl}/api/bitget`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -80,7 +85,8 @@ export async function placeMarketEntry(
 export async function setLeverage(symbol: string, leverage: number, marginMode: 'isolated' | 'cross' = 'isolated'): Promise<LiveOrderResult> {
   try {
     const bgSym = toBitgetSymbol(symbol)
-    const res = await fetch(`/api/bitget?action=set-leverage&product=futures&symbol=${bgSym}&leverage=${leverage}&marginMode=${marginMode}`, { cache: 'no-store' })
+    const baseUrl = 'http://localhost:3000'
+    const res = await fetch(`${baseUrl}/api/bitget?action=set-leverage&product=futures&symbol=${bgSym}&leverage=${leverage}&marginMode=${marginMode}`, { cache: 'no-store' })
     const data = await res.json().catch(() => ({}))
     if (!data?.live) return { ok: false, error: data?.message || data?.error || 'set-leverage failed' }
     return { ok: true, data: data.data }
@@ -93,7 +99,8 @@ export async function setLeverage(symbol: string, leverage: number, marginMode: 
 export async function setMarginMode(symbol: string, marginMode: 'isolated' | 'cross'): Promise<LiveOrderResult> {
   try {
     const bgSym = toBitgetSymbol(symbol)
-    const res = await fetch(`/api/bitget?action=set-margin-mode&product=futures&symbol=${bgSym}&marginMode=${marginMode}`, { cache: 'no-store' })
+    const baseUrl = 'http://localhost:3000'
+    const res = await fetch(`${baseUrl}/api/bitget?action=set-margin-mode&product=futures&symbol=${bgSym}&marginMode=${marginMode}`, { cache: 'no-store' })
     const data = await res.json().catch(() => ({}))
     if (!data?.live) return { ok: false, error: data?.message || data?.error || 'set-margin-mode failed' }
     return { ok: true, data: data.data }
@@ -181,19 +188,54 @@ export async function fetchLiveTickers(symbols: string[], product: 'spot' | 'fut
       }))
       return results.filter((t): t is NonNullable<typeof t> => t !== null && !isNaN(t.price) && t.price > 0)
     }
-    // spot
-    const res = await fetch(`https://api.bitget.com/api/v2/spot/market/tickers?symbols=${encodeURIComponent(bgSyms)}`, { cache: 'no-store' })
-    const json = await res.json()
-    const arr = json?.data || []
+    // spot — try batch first, fall back to per-symbol if batch fails/partial
     const reverseMap: Record<string, string> = {}
     for (const k in SYMBOL_TO_BITGET_SPOT) reverseMap[SYMBOL_TO_BITGET_SPOT[k]] = k
-    return arr.map((t: any) => ({
+
+    const mapTicker = (t: any) => ({
       symbol: reverseMap[t.symbol] || t.symbol,
       price: parseFloat(t.lastPr),
       ts: Date.now(),
       volume24h: parseFloat(t.quoteVolume24h) || 0,
       change24h: parseFloat(t.change24h) || 0,
-    })).filter((t: any) => !isNaN(t.price) && t.price > 0)
+    })
+
+    // Try batch request
+    try {
+      const res = await fetch(`https://api.bitget.com/api/v2/spot/market/tickers?symbols=${encodeURIComponent(bgSyms)}`, { cache: 'no-store' })
+      const json = await res.json()
+      const arr = (json?.data || []).filter((t: any) => t)
+      const mapped = arr.map(mapTicker).filter((t: any) => !isNaN(t.price) && t.price > 0)
+      // If we got all symbols, return. Otherwise fall back to per-symbol for missing ones.
+      if (mapped.length === symbols.length) return mapped
+      // Fall through to per-symbol fetch for missing symbols
+      const gotSymbols = new Set(mapped.map((t: any) => t.symbol))
+      const missing = symbols.filter(s => !gotSymbols.has(s))
+      const extra = await Promise.all(missing.map(async (sym) => {
+        try {
+          const bgSym = toBitgetSymbol(sym)
+          const r = await fetch(`https://api.bitget.com/api/v2/spot/market/tickers?symbols=${bgSym}`, { cache: 'no-store' })
+          const j = await r.json()
+          const t = Array.isArray(j?.data) ? j.data[0] : j?.data
+          if (!t) return null
+          return mapTicker(t)
+        } catch { return null }
+      }))
+      return [...mapped, ...extra.filter((t): t is NonNullable<typeof t> => t !== null && !isNaN(t.price) && t.price > 0)]
+    } catch {
+      // batch failed entirely — fetch each symbol individually
+      const results = await Promise.all(symbols.map(async (sym) => {
+        try {
+          const bgSym = toBitgetSymbol(sym)
+          const r = await fetch(`https://api.bitget.com/api/v2/spot/market/tickers?symbols=${bgSym}`, { cache: 'no-store' })
+          const j = await r.json()
+          const t = Array.isArray(j?.data) ? j.data[0] : j?.data
+          if (!t) return null
+          return mapTicker(t)
+        } catch { return null }
+      }))
+      return results.filter((t): t is NonNullable<typeof t> => t !== null && !isNaN(t.price) && t.price > 0)
+    }
   } catch (e) {
     return []
   }
