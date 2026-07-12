@@ -415,6 +415,13 @@ async function runOrchestrator(symbol: string, agents: AgentOutput[]): Promise<{
 
 // ---------------- EXECUTION ----------------
 async function executeDecision(symbol: string, decision: { signal: Signal; confidence: number; rationale: string }, atr: number) {
+  // SAFETY: verify the symbol is still in the active trading list before
+  // placing any order. This prevents trades on removed tickers even if the
+  // cycle's snapshot still includes them.
+  if (!TRADE_SYMBOLS.find((s) => s.symbol === symbol)) {
+    console.log(`[execute] skipping ${symbol} — not in active symbol list`)
+    return
+  }
   const port = snapshotPortfolio()
   const pos = port.positions.find((p) => p.symbol === symbol)
   const price = getCandles(symbol, 2)[getCandles(symbol, 2).length - 1]?.close ?? 0
