@@ -257,10 +257,10 @@ async function syncLiveBalance() {
       const usdt = data.assets.find((a: any) => a.coin === 'USDT')
       const realBalance = usdt?.total ?? 0
       if (realBalance > 0) {
-        // Preserve unrealized P/L from open positions, but sync cash to real balance
-        const openPnl = state.portfolio.openPnl
+        // In LIVE mode: cash = real Bitget balance, equity = cash
+        // (the real balance already includes unrealized P/L via margin)
         state.portfolio.cash = realBalance
-        state.portfolio.equity = realBalance + openPnl
+        state.portfolio.equity = realBalance
         if (state.portfolio.equity > state.peakEquity) state.peakEquity = state.portfolio.equity
       }
     }
@@ -413,7 +413,15 @@ function updateUnrealized() {
     exposure += pos.size * price
   }
   state.portfolio.openPnl = openPnl
-  state.portfolio.equity = state.portfolio.cash + openPnl
+  // In LIVE mode: equity = cash (the real Bitget balance, which already
+  // accounts for unrealized P/L via the margin system). Don't add openPnl
+  // again — that would double-count the loss.
+  // In PAPER mode: equity = cash + openPnl (the paper margin model)
+  if (state.mode === 'live') {
+    state.portfolio.equity = state.portfolio.cash
+  } else {
+    state.portfolio.equity = state.portfolio.cash + openPnl
+  }
   state.portfolio.exposure = state.portfolio.equity > 0 ? exposure / state.portfolio.equity : 0
   if (state.portfolio.equity > state.peakEquity) state.peakEquity = state.portfolio.equity
   state.portfolio.dayPnl = state.portfolio.equity - state.dayStartEquity
