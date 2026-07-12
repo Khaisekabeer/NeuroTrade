@@ -113,6 +113,8 @@ export interface SymbolMeta {
   volume24h: number
 }
 
+// Mutable runtime list of trading symbols. Can be updated from the dashboard
+// via the /api/symbols endpoint. Defaults to 6 popular coins.
 export const TRADE_SYMBOLS: SymbolMeta[] = [
   { symbol: 'BTC/USDT', name: 'Bitcoin', base: 'BTC', price: 67250, change24h: 0, volume24h: 0 },
   { symbol: 'ETH/USDT', name: 'Ethereum', base: 'ETH', price: 3480, change24h: 0, volume24h: 0 },
@@ -121,3 +123,16 @@ export const TRADE_SYMBOLS: SymbolMeta[] = [
   { symbol: 'DOGE/USDT', name: 'Dogecoin', base: 'DOGE', price: 0.14, change24h: 0, volume24h: 0 },
   { symbol: 'ADA/USDT', name: 'Cardano', base: 'ADA', price: 0.45, change24h: 0, volume24h: 0 },
 ]
+
+// Helper: add a new symbol to the list (if not already present)
+export function addSymbol(sym: SymbolMeta) {
+  if (!TRADE_SYMBOLS.find((s) => s.symbol === sym.symbol)) {
+    TRADE_SYMBOLS.push(sym)
+  }
+}
+
+// Helper: remove a symbol by its 'BTC/USDT' identifier
+export function removeSymbol(symbol: string) {
+  const idx = TRADE_SYMBOLS.findIndex((s) => s.symbol === symbol)
+  if (idx >= 0) TRADE_SYMBOLS.splice(idx, 1)
+}

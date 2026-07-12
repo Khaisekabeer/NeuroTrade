@@ -298,6 +298,36 @@ export async function setMode(mode: TradingMode) {
 
 export function getMode(): TradingMode { return state.mode }
 
+// Called when a new symbol is added at runtime — seeds its tick + candle buffer
+export function seedNewSymbol(symbol: string, price: number) {
+  if (!state.ticks.has(symbol)) {
+    state.ticks.set(symbol, {
+      price,
+      ts: Date.now(),
+      bid: price * 0.9999,
+      ask: price * 1.0001,
+      volume24h: 0,
+      change24h: 0,
+    })
+  }
+  if (!state.candles.has(symbol)) {
+    const arr: Candle[] = []
+    const now = Date.now()
+    let p = price * 0.99
+    for (let i = 19; i >= 0; i--) {
+      const open = p
+      const drift = (Math.random() - 0.5) * price * 0.002
+      const close = Math.max(0.01, open + drift)
+      arr.push({
+        symbol, timeframe: '1m', openTime: now - i * 60_000,
+        open, high: Math.max(open, close), low: Math.min(open, close), close, volume: 1000,
+      })
+      p = close
+    }
+    state.candles.set(symbol, arr)
+  }
+}
+
 export function isLiveConfigured(): boolean {
   return !!(process.env.BITGET_API_KEY && process.env.BITGET_API_SECRET && process.env.BITGET_API_PASSPHRASE)
 }
