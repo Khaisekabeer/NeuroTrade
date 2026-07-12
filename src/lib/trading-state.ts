@@ -105,10 +105,10 @@ const state: State = (g.__ND_STATE__ ??= {
     maxRiskPerTrade: 0.02,
     maxTotalExposure: 0.6,
     maxDrawdown: 0.15,
-    leverageCap: 5,
+    leverageCap: 20,
     product: 'spot',
     marginMode: 'isolated',
-    leverage: 3,
+    leverage: 10,
   },
   startedAt: Date.now(),
   dayStartEquity: 100_000,
@@ -177,22 +177,36 @@ function pushNewCandle(c: Candle) {
 async function pollLivePrices() {
   const symbols = TRADE_SYMBOLS.map((s) => s.symbol)
   const product = state.risk.product
-  const ticks = await fetchLiveTickers(symbols, product)
-  if (ticks.length === 0) {
-    // fallback: if futures tickers fail, try spot (futures symbols may not exist)
-    const spotTicks = await fetchLiveTickers(symbols, 'spot')
-    for (const t of spotTicks) {
-      applyTick(t.symbol, t.price)
-      const existing = state.ticks.get(t.symbol)
-      if (existing) { existing.volume24h = t.volume24h; existing.change24h = t.change24h }
-    }
-  } else {
-    for (const t of ticks) {
-      applyTick(t.symbol, t.price)
-      const existing = state.ticks.get(t.symbol)
-      if (existing) { existing.volume24h = t.volume24h; existing.change24h = t.change24h }
+
+  // ALWAYS fetch spot prices first — they're guaranteed to work for all symbols
+  // and serve as the reliable base price feed.
+  const spotTicks = await fetchLiveTickers(symbols, 'spot')
+  const gotSymbols = new Set<string>()
+
+  for (const t of spotTicks) {
+    applyTick(t.symbol, t.price)
+    const existing = state.ticks.get(t.symbol)
+    if (existing) { existing.volume24h = t.volume24h; existing.change24h = t.change24h }
+    gotSymbols.add(t.symbol)
+  }
+
+  // If in futures mode, try to overlay futures prices (they're slightly
+  // different from spot due to funding). If futures fails for any symbol,
+  // the spot price from above remains — so ALL symbols always get updated.
+  if (product === 'futures' && spotTicks.length > 0) {
+    const futTicks = await fetchLiveTickers(symbols, 'futures')
+    for (const t of futTicks) {
+      applyTick(t.symbol, t.price)  // override spot with futures price
+      gotSymbols.add(t.symbol)
     }
   }
+
+  // Log any symbols that didn't get any price (shouldn't happen now)
+  const missing = symbols.filter(s => !gotSymbols.has(s))
+  if (missing.length > 0) {
+    console.warn(`[pollLivePrices] no price for: ${missing.join(', ')}`)
+  }
+
   state.connected = true
 }
 

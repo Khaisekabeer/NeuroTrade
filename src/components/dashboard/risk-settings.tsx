@@ -24,10 +24,10 @@ export function RiskSettings() {
       maxRiskPerTrade: risk.maxRiskPerTrade ?? 0.02,
       maxTotalExposure: risk.maxTotalExposure ?? 0.6,
       maxDrawdown: risk.maxDrawdown ?? 0.15,
-      leverageCap: risk.leverageCap ?? 5,
+      leverageCap: risk.leverageCap ?? 20,
       product: risk.product ?? 'spot',
       marginMode: risk.marginMode ?? 'isolated',
-      leverage: risk.leverage ?? 3,
+      leverage: risk.leverage ?? 10,
     }
     const sig = JSON.stringify(normalized)
     if (sig !== lastServerRef.current) {
@@ -143,20 +143,20 @@ export function RiskSettings() {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <Label className="text-[10px] uppercase tracking-wider text-zinc-500">Leverage</Label>
-                <span className="text-[11px] font-mono tabular-nums text-emerald-300 font-bold">{draft.leverage ?? 3}x</span>
+                <span className="text-[11px] font-mono tabular-nums text-emerald-300 font-bold">{draft.leverage ?? 10}x</span>
               </div>
               <input
                 type="range"
                 min={1}
-                max={Math.min(125, draft.leverageCap ?? 5)}
+                max={Math.min(125, draft.leverageCap ?? 20)}
                 step={1}
-                value={draft.leverage ?? 3}
+                value={draft.leverage ?? 10}
                 onChange={(e) => update('leverage', Number(e.target.value))}
                 className="w-full accent-emerald-500"
               />
               <div className="flex justify-between text-[9px] text-zinc-600 mt-0.5">
                 <span>1x</span>
-                <span>{Math.min(125, draft.leverageCap)}x (cap)</span>
+                <span>{Math.min(125, draft.leverageCap ?? 20)}x (cap)</span>
               </div>
             </div>
           </>

@@ -256,6 +256,7 @@ export async function POST(req: Request) {
             triggerType: body.triggerType || 'fill_price',
             productType: pt,
             marginMode: futuresMarginMode,
+            marginCoin: body.marginCoin || 'USDT',  // required for USDT-margined futures
             reduceOnly: true,  // SL/TP are always reduce-only
             force: 'gtc',
           })
@@ -267,7 +268,7 @@ export async function POST(req: Request) {
     const requestPath = p === 'spot'
       ? '/api/v2/spot/trade/place-order'
       : `/api/v2/mix/order/place-order?productType=${pt}`
-    // Bitget futures requires marginMode ('isolated' or 'crossed')
+    // Bitget futures requires marginMode ('isolated' or 'crossed') + marginCoin ('USDT')
     const rawMm = body.marginMode || 'isolated'
     const futuresMarginMode = rawMm === 'cross' ? 'crossed' : rawMm
     const payload = p === 'spot'
@@ -285,6 +286,7 @@ export async function POST(req: Request) {
           ...(body.price ? { price: String(body.price) } : {}),
           productType: pt,
           marginMode: futuresMarginMode,
+          marginCoin: body.marginCoin || 'USDT',  // required for USDT-margined futures
           tradeSide: body.tradeSide || (body.side === 'buy' ? 'open' : 'close'),
           reduceOnly: body.tradeSide === 'close',  // closing orders are reduce-only
           force: body.force || 'gtc',
