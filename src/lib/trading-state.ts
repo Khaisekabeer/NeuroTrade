@@ -554,12 +554,19 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
     if (pos.liveTpOrderId) { await cancelOrder(symbol, pos.liveTpOrderId, { product }) }
     // place a market close order (opposite side, tradeSide='close' for futures)
     const closeSide = pos.side === 'LONG' ? 'SHORT' : 'LONG'
-    await placeMarketEntry(symbol, closeSide, pos.size, {
+    const closeResult = await placeMarketEntry(symbol, closeSide, pos.size, {
       product: state.risk.product,
       tradeSide: 'close',
       marginMode: state.risk.marginMode,
     })
-    console.log(`[live] closed ${pos.side} ${symbol} reason=${reason}`)
+    if (!closeResult.ok) {
+      // CRITICAL: the Bitget close order failed. Do NOT delete the in-memory
+      // position — keep it open so the bot can retry. Record the error.
+      console.error(`[live] close order FAILED for ${symbol}:`, closeResult.error)
+      state.lastLiveError = `Failed to close ${symbol} on Bitget: ${closeResult.error}. Position is still open on Bitget — close it manually.`
+      return null
+    }
+    console.log(`[live] closed ${pos.side} ${symbol} reason=${reason} orderId=${closeResult.orderId}`)
   }
 
   const pnl = pos.side === 'LONG' ? (price - pos.entryPrice) * pos.size : (pos.entryPrice - price) * pos.size
