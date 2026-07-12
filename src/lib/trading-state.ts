@@ -621,9 +621,14 @@ export async function manualOpen(symbol: string, side: TradeSide, riskPct: numbe
   }
   const price = side === 'LONG' ? t.ask : t.bid
   if (!price || price <= 0) return { ok: false, error: 'Invalid price for ' + symbol }
+  const leverage = state.risk.product === 'futures' ? Math.min(state.risk.leverage, state.risk.leverageCap) : 1
   const riskAmt = state.portfolio.equity * riskPct
   const stopDist = price * 0.01
-  let size = riskAmt / stopDist
+  let size = (riskAmt / stopDist) * leverage
+  // For futures: round to whole contracts (Bitget minimum is 1 contract)
+  if (state.risk.product === 'futures') {
+    size = Math.max(1, Math.floor(size))
+  }
   // NOTE: We do NOT block small orders here. Bitget has its own minimums
   // (spot: varies by symbol, futures: 1 contract). If the order is too small,
   // Bitget will reject it and the error will show in the API Monitor panel.

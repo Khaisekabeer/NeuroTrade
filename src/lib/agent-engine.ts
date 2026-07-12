@@ -432,21 +432,23 @@ async function executeDecision(symbol: string, decision: { signal: Signal; confi
   if (pos && pos.side === decision.signal) return
 
   const risk = getRisk()
+  const leverage = risk.product === 'futures' ? Math.min(risk.leverage, risk.leverageCap) : 1
   const riskAmt = port.equity * risk.maxRiskPerTrade * decision.confidence
   const stopDist = Math.max(atr * 1.5, price * 0.008)
-  let size = riskAmt / stopDist
+  // Size = risk amount / stop distance, THEN multiply by leverage for futures.
+  // This gives leveraged buying power: $2 equity × 20x = $40 notional.
+  let size = (riskAmt / stopDist) * leverage
   if (size <= 0) return
 
-  // EXPOSURE CAP: cap each position at (equity × maxTotalExposure / number of symbols)
-  // so one position doesn't consume the entire exposure budget. This ensures
-  // multiple tickers (BTC, ETH, SOL, XRP, DOGE, ADA) can all hold positions.
+  // EXPOSURE CAP: cap each position at (equity × maxTotalExposure × leverage / numSymbols)
+  // so one position doesn't consume the entire exposure budget.
   const numSymbols = TRADE_SYMBOLS.length
-  const perSymbolBudget = port.equity * risk.maxTotalExposure / numSymbols
+  const perSymbolBudget = port.equity * risk.maxTotalExposure * leverage / numSymbols
   const existingNotional = port.positions.reduce((s, p) => {
     const px = getCandles(p.symbol, 2)[getCandles(p.symbol, 2).length - 1]?.close ?? p.entryPrice
     return s + p.size * px
   }, 0)
-  const totalBudget = port.equity * risk.maxTotalExposure
+  const totalBudget = port.equity * risk.maxTotalExposure * leverage
   const availableTotal = totalBudget - existingNotional
   if (availableTotal <= 0) {
     console.log(`[execute] ${symbol}: exposure cap reached (${(port.exposure * 100).toFixed(1)}%/${(risk.maxTotalExposure * 100).toFixed(0)}%) — skipping`)
@@ -459,6 +461,12 @@ async function executeDecision(symbol: string, decision: { signal: Signal; confi
     size = maxNotional / price
   }
   if (size <= 0) return
+
+  // For futures: Bitget requires size in whole contracts. Round to the
+  // minimum step (usually 1 for most USDT-FUTURES symbols).
+  if (risk.product === 'futures') {
+    size = Math.max(1, Math.floor(size))
+  }
 
   const side: TradeSide = decision.signal === 'LONG' ? 'LONG' : 'SHORT'
   const sl = side === 'LONG' ? price - stopDist : price + stopDist
