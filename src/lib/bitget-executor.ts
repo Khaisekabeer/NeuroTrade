@@ -202,9 +202,10 @@ export async function fetchLiveTickers(symbols: string[], product: 'spot' | 'fut
       change24h: parseFloat(t.change24h) || 0,
     })
 
-    // Try batch request
+    // Try batch request — do NOT use encodeURIComponent (it encodes the comma
+    // to %2C which Bitget doesn't parse, causing only the first symbol to return)
     try {
-      const res = await fetch(`https://api.bitget.com/api/v2/spot/market/tickers?symbols=${encodeURIComponent(bgSyms)}`, { cache: 'no-store' })
+      const res = await fetch(`https://api.bitget.com/api/v2/spot/market/tickers?symbols=${bgSyms}`, { cache: 'no-store' })
       const json = await res.json()
       const arr = (json?.data || []).filter((t: any) => t)
       const mapped = arr.map(mapTicker).filter((t: any) => !isNaN(t.price) && t.price > 0)

@@ -286,9 +286,10 @@ export async function POST(req: Request) {
           ...(body.price ? { price: String(body.price) } : {}),
           productType: pt,
           marginMode: futuresMarginMode,
-          marginCoin: body.marginCoin || 'USDT',  // required for USDT-margined futures
+          marginCoin: body.marginCoin || 'USDT',
           tradeSide: body.tradeSide || (body.side === 'buy' ? 'open' : 'close'),
-          reduceOnly: body.tradeSide === 'close',  // closing orders are reduce-only
+          // reduceOnly: only include for closing orders (Bitget rejects reduceOnly:false)
+          ...(body.tradeSide === 'close' ? { reduceOnly: true } : {}),
           force: body.force || 'gtc',
         })
     const data = await bitgetSigned('POST', requestPath, payload)
