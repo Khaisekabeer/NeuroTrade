@@ -423,11 +423,25 @@ export async function openPosition(symbol: string, side: TradeSide, size: number
     // return an error instead of sending a doomed order to Bitget.
     const bgSym = symbol.replace('/', '')
     const spec = (await import('./bitget-executor'))._getSpec(bgSym)
-    if (spec && size < spec.minTradeNum) {
-      const msg = `Order size ${size} ${symbol.split('/')[0]} is below Bitget minimum (${spec.minTradeNum}). Need more capital or higher leverage. Equity=$${equity.toFixed(2)} lev=${leverage}x → buying power=$${(equity * leverage).toFixed(2)} → max size=${((equity * leverage) / price).toFixed(4)} ${symbol.split('/')[0]} (min ${spec.minTradeNum}).`
-      console.error('[openPosition]', msg)
-      state.lastLiveError = msg
-      return null
+    if (spec) {
+      if (size < spec.minTradeNum) {
+        // Try to bump up to the minimum if we have buying power
+        const minNotional = spec.minTradeNum * price
+        const buyingPower = equity * leverage
+        if (minNotional <= buyingPower) {
+          size = spec.minTradeNum
+          console.log(`[openPosition] ${symbol}: bumped size to minimum ${spec.minTradeNum}`)
+        } else {
+          const msg = `Order size ${size} ${symbol.split('/')[0]} is below Bitget minimum (${spec.minTradeNum}). Need more capital or higher leverage. Equity=$${equity.toFixed(2)} lev=${leverage}x → buying power=$${buyingPower.toFixed(2)} → min order cost=$${minNotional.toFixed(2)}.`
+          console.error('[openPosition]', msg)
+          state.lastLiveError = msg
+          return null
+        }
+      }
+    } else {
+      // Spec not loaded — hard floor at 1 to prevent tiny float orders
+      size = Math.max(1, Math.floor(size))
+      console.warn(`[openPosition] ${symbol}: no contract spec loaded, using floor=${size}`)
     }
   }
 
