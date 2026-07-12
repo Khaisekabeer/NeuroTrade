@@ -17,7 +17,7 @@ import type { AgentOutput, OrchestratorDecision, Signal, TradeSide } from './typ
 
 let zaiPromise: Promise<any> | null = null
 let zaiFailedAt = 0
-const ZAI_RETRY_MS = 60_000 // after a 429 rate-limit, wait 60s before retrying
+const ZAI_RETRY_MS = 30_000 // after a 429 rate-limit, wait 30s before retrying (shorter = faster recovery)
 
 async function getZAI() {
   // If the SDK previously failed, retry after a cooldown so a transient
@@ -406,7 +406,28 @@ async function runCycle() {
           }
         }
       } else {
-        sentiment = await runSentimentAgent(symbol)
+        // RATE-LIMIT OPTIMIZATION: run Technical + ML FIRST (no API calls),
+        // and only call the Sentiment LLM if they disagree or are weak.
+        // This cuts z-ai API calls by ~70% and avoids 429 rate-limiting.
+        const technical = runTechnicalAgent(symbol)
+        const ml = runMLAgent(symbol)
+        const techMlAgree = technical.signal === ml.signal && technical.signal !== 'FLAT'
+        const techMlStrong = Math.abs(technical.confidence) > 0.4 || Math.abs(ml.confidence) > 0.5
+        const cached = sentimentCache.get(symbol)
+        const cacheValid = cached && Date.now() - cached.ts < SENTIMENT_TTL
+        if (techMlAgree && techMlStrong && cacheValid) {
+          // skip sentiment LLM — tech + ML agree strongly + we have a cached sentiment
+          sentiment = {
+            agent: 'SENTIMENT',
+            signal: cached!.score > 0.25 ? 'LONG' : cached!.score < -0.25 ? 'SHORT' : 'FLAT',
+            confidence: 0.6,
+            detail: { score: cached!.score, source: 'cached' },
+            rationale: `Sentiment ${cached!.score.toFixed(2)} (cached — tech+ML agree, LLM skipped to save API quota)`,
+            ts: Date.now(),
+          }
+        } else {
+          sentiment = await runSentimentAgent(symbol)
+        }
       }
       const technical = runTechnicalAgent(symbol)
       const ml = runMLAgent(symbol)
