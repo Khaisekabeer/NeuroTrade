@@ -12,7 +12,7 @@ import type {
   AgentOutput, Signal, TradeSide, TradeStatus,
 } from './types'
 import { TRADE_SYMBOLS } from './types'
-import { placeMarketEntry, placeStopOrder, cancelOrder, fetchLiveTickers, fetchLiveKlines } from './bitget-executor'
+import { placeMarketEntry, placeStopOrder, cancelOrder, fetchLiveTickers, fetchLiveKlines, roundToContractSize, loadContractSpecs } from './bitget-executor'
 
 export type TradingMode = 'paper' | 'live'
 
@@ -213,6 +213,10 @@ async function pollLivePrices() {
 async function startLivePricePolling() {
   if (state.livePriceTimer) return
   const product = state.risk.product
+  // load futures contract specs (sizeMultiplier, minTradeNum) for order sizing
+  if (product === 'futures') {
+    await loadContractSpecs()
+  }
   // bootstrap candle history from Bitget once
   if (!state.liveTickerLoaded) {
     state.liveTickerLoaded = true
@@ -381,9 +385,9 @@ export async function openPosition(symbol: string, side: TradeSide, size: number
     notional = size * price
     if (size <= 0) return null
   }
-  // For futures: round to whole contracts (Bitget minimum is 1 contract)
+  // For futures: round to the symbol's contract size multiplier (e.g. SOL=0.1, BTC=0.0001)
   if (state.risk.product === 'futures') {
-    size = Math.max(1, Math.floor(size))
+    size = roundToContractSize(symbol, size)
   }
 
   // ---- LIVE MODE: place real orders on Bitget ----
@@ -631,9 +635,10 @@ export async function manualOpen(symbol: string, side: TradeSide, riskPct: numbe
   const riskAmt = state.portfolio.equity * riskPct
   const stopDist = price * 0.01
   let size = (riskAmt / stopDist) * leverage
-  // For futures: round to whole contracts (Bitget minimum is 1 contract)
+  // For futures: round to the symbol's contract size multiplier
   if (state.risk.product === 'futures') {
-    size = Math.max(1, Math.floor(size))
+    await loadContractSpecs()
+    size = roundToContractSize(symbol, size)
   }
   // NOTE: We do NOT block small orders here. Bitget has its own minimums
   // (spot: varies by symbol, futures: 1 contract). If the order is too small,

@@ -162,7 +162,43 @@ export async function placeMarketClose(symbol: string, positionSide: 'LONG' | 'S
   return placeMarketEntry(symbol, closeSide, size, { tradeSide: 'close' })
 }
 
-// Fetch real live tickers from Bitget public API (no auth needed).
+// Fetch the contract specs (sizeMultiplier, minTradeNum) for futures symbols.
+// Bitget's minimum order size varies per symbol:
+//   BTC: 0.0001 contracts, ETH: 0.01, SOL: 0.1, XRP/ADA/DOGE: 1
+// We must round the order size to the symbol's sizeMultiplier.
+const contractSpecsCache = new Map<string, { sizeMultiplier: number; minTradeNum: number }>()
+let contractSpecsLoaded = false
+
+export async function loadContractSpecs(): Promise<void> {
+  if (contractSpecsLoaded) return
+  try {
+    const res = await fetch('https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES', { cache: 'no-store' })
+    const json = await res.json()
+    for (const c of (json?.data || [])) {
+      contractSpecsCache.set(c.symbol, {
+        sizeMultiplier: parseFloat(c.sizeMultiplier) || 1,
+        minTradeNum: parseFloat(c.minTradeNum) || 1,
+      })
+    }
+    contractSpecsLoaded = true
+    console.log(`[bitget-executor] loaded ${contractSpecsCache.size} contract specs`)
+  } catch (e) {
+    console.warn('[bitget-executor] failed to load contract specs:', (e as Error).message)
+  }
+}
+
+// Round a size to the symbol's contract multiplier + enforce minimum.
+// e.g. for SOL (multiplier 0.1, min 0.1): size=0.57 → 0.5, size=0.05 → 0.1 (min)
+export function roundToContractSize(symbol: string, size: number): number {
+  const bgSym = toBitgetSymbol(symbol)
+  const spec = contractSpecsCache.get(bgSym)
+  if (!spec) return Math.max(1, Math.floor(size))  // fallback
+  const { sizeMultiplier, minTradeNum } = spec
+  const rounded = Math.floor(size / sizeMultiplier) * sizeMultiplier
+  return Math.max(minTradeNum, rounded)
+}
+
+
 // Supports BOTH spot and futures — pass product='futures' to hit the mix endpoint.
 export async function fetchLiveTickers(symbols: string[], product: 'spot' | 'futures' = 'spot'): Promise<Array<{ symbol: string; price: number; ts: number; volume24h: number; change24h: number }>> {
   try {

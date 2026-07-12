@@ -462,10 +462,11 @@ async function executeDecision(symbol: string, decision: { signal: Signal; confi
   }
   if (size <= 0) return
 
-  // For futures: Bitget requires size in whole contracts. Round to the
-  // minimum step (usually 1 for most USDT-FUTURES symbols).
+  // For futures: round to the symbol's contract size multiplier (e.g. SOL=0.1, BTC=0.0001)
   if (risk.product === 'futures') {
-    size = Math.max(1, Math.floor(size))
+    const { roundToContractSize, loadContractSpecs } = await import('./bitget-executor')
+    await loadContractSpecs()
+    size = roundToContractSize(symbol, size)
   }
 
   const side: TradeSide = decision.signal === 'LONG' ? 'LONG' : 'SHORT'
