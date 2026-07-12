@@ -15,13 +15,30 @@ import { getCandles, getTicks, getRisk, recordDecision, openPosition, closePosit
 import { TRADE_SYMBOLS } from './types'
 import type { AgentOutput, OrchestratorDecision, Signal, TradeSide } from './types'
 
+// ─────────────────────────────────────────────────────────────────────
+// LLM PROVIDER — supports z-ai (default), DeepSeek (free), or OpenAI.
+// Set LLM_PROVIDER in .env to switch. DeepSeek is free + open-source:
+//   1. Get a free API key at https://platform.deepseek.com (gives $0.50 free credit = ~500K tokens)
+//   2. Add to .env:
+//        LLM_PROVIDER=deepseek
+//        DEEPSEEK_API_KEY=sk-...
+//   3. Restart — the sentiment + orchestrator agents use DeepSeek instead of z-ai.
+// ─────────────────────────────────────────────────────────────────────
+
+type LlmProvider = 'z-ai' | 'deepseek' | 'openai'
+const LLM_PROVIDER: LlmProvider = (process.env.LLM_PROVIDER as LlmProvider) || 'z-ai'
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || ''
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || ''
+
+// Universal chat completion interface
+interface ChatMessage { role: string; content: string }
+interface ChatResult { content: string }
+
 let zaiPromise: Promise<any> | null = null
 let zaiFailedAt = 0
-const ZAI_RETRY_MS = 30_000 // after a 429 rate-limit, wait 30s before retrying (shorter = faster recovery)
+const ZAI_RETRY_MS = 30_000
 
 async function getZAI() {
-  // If the SDK previously failed, retry after a cooldown so a transient
-  // "sandbox is inactive" error doesn't poison the engine forever.
   if (zaiPromise === null && zaiFailedAt && Date.now() - zaiFailedAt < ZAI_RETRY_MS) {
     throw new Error('z-ai SDK temporarily unavailable (cooldown)')
   }
@@ -33,6 +50,74 @@ async function getZAI() {
     })
   }
   return zaiPromise
+}
+
+// Universal chat completion — works with z-ai, DeepSeek, or OpenAI.
+// DeepSeek is OpenAI-compatible: https://api.deepseek.com/v1/chat/completions
+// Models: 'deepseek-chat' (fast, cheap) or 'deepseek-reasoner' (smarter)
+async function llmChat(messages: ChatMessage[]): Promise<ChatResult> {
+  if (LLM_PROVIDER === 'deepseek') {
+    if (!DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY not set in .env')
+    const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: messages.map(m => ({ role: m.role === 'assistant' ? 'system' : m.role, content: m.content })),
+        temperature: 0.3,
+        max_tokens: 500,
+      }),
+    })
+    if (!res.ok) {
+      const errBody = await res.text()
+      throw new Error(`DeepSeek API ${res.status}: ${errBody.slice(0, 200)}`)
+    }
+    const json = await res.json()
+    const content = json?.choices?.[0]?.message?.content || ''
+    return { content }
+  }
+  if (LLM_PROVIDER === 'openai') {
+    if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set in .env')
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: messages.map(m => ({ role: m.role === 'assistant' ? 'system' : m.role, content: m.content })),
+        temperature: 0.3,
+        max_tokens: 500,
+      }),
+    })
+    if (!res.ok) throw new Error(`OpenAI API ${res.status}`)
+    const json = await res.json()
+    return { content: json?.choices?.[0]?.message?.content || '' }
+  }
+  // default: z-ai
+  const zai = await getZAI()
+  const completion = await zai.chat.completions.create({
+    messages: messages.map(m => ({ role: m.role, content: m.content })),
+    thinking: { type: 'disabled' },
+  })
+  return { content: completion.choices[0]?.message?.content || '' }
+}
+
+// Universal web search — z-ai has built-in; for DeepSeek/OpenAI we use a free
+// news API (CryptoCompare) + pass the headlines to the LLM for scoring.
+async function llmSearchNews(query: string, num = 6): Promise<string[]> {
+  if (LLM_PROVIDER === 'z-ai') {
+    const zai = await getZAI()
+    const results: any[] = await zai.functions.invoke('web_search', { query, num })
+    return (results || []).slice(0, num).map((r) => r.name || r.snippet || '').filter(Boolean)
+  }
+  // DeepSeek / OpenAI — use CryptoCompare's free news API (no key needed)
+  try {
+    const base = query.split(' ')[0]
+    const res = await fetch(`https://min-api.cryptocompare.com/data/v2/news/?categories=${base}&lang=EN`, { cache: 'no-store' })
+    const json = await res.json()
+    return (json?.Data || []).slice(0, num).map((a: any) => a.title || '').filter(Boolean)
+  } catch {
+    return []
+  }
 }
 
 // Check if an error indicates rate-limiting (429) or session expiry.
@@ -125,6 +210,8 @@ export function stopAllEngine() {
 }
 
 // ---------------- SENTIMENT AGENT ----------------
+// ALWAYS runs — news sentiment is a crucial fundamental indicator.
+// Uses the universal llmSearchNews + llmChat so it works with z-ai, DeepSeek, or OpenAI.
 async function runSentimentAgent(symbol: string): Promise<AgentOutput> {
   const base = symbol.split('/')[0]
   const cached = sentimentCache.get(symbol)
@@ -144,21 +231,16 @@ async function runSentimentAgent(symbol: string): Promise<AgentOutput> {
         ts: Date.now(),
       }
     } else {
-      const results: any[] = await withZAI((zai) => zai.functions.invoke('web_search', {
-        query: `${base} crypto news today price`,
-        num: 8,
-      }))
-      headlines = (results || []).slice(0, 6).map((r: any) => r.name || r.snippet || '').filter(Boolean)
+      // 1. Fetch news headlines (z-ai web_search OR CryptoCompare for DeepSeek/OpenAI)
+      headlines = await llmSearchNews(`${base} crypto news today price`, 6)
       if (headlines.length === 0) headlines = ['No recent headlines found']
       const context = headlines.map((h, i) => `${i + 1}. ${h}`).join('\n')
-      const completion = await withZAI((zai) => zai.chat.completions.create({
-        messages: [
-          { role: 'assistant', content: 'You are a crypto market sentiment analyst. Given recent news headlines about a coin, output a sentiment score from -1 (very bearish) to +1 (very bullish). Respond with ONLY a JSON object: {"score": <number>, "confidence": <0..1>, "reason": "<short>"}' },
-          { role: 'user', content: `Coin: ${base}\nHeadlines:\n${context}\n\nCurrent price action context: see recent candle data. Output JSON only.` },
-        ],
-        thinking: { type: 'disabled' },
-      }))
-      const text = completion.choices[0]?.message?.content || ''
+      // 2. LLM scores the sentiment from the headlines
+      const result = await llmChat([
+        { role: 'assistant', content: 'You are a crypto market sentiment analyst. Given recent news headlines about a coin, output a sentiment score from -1 (very bearish) to +1 (very bullish). Respond with ONLY a JSON object: {"score": <number>, "confidence": <0..1>, "reason": "<short>"}' },
+        { role: 'user', content: `Coin: ${base}\nHeadlines:\n${context}\n\nOutput JSON only.` },
+      ])
+      const text = result.content || ''
       const match = text.match(/\{[\s\S]*\}/)
       if (match) {
         const obj = JSON.parse(match[0])
@@ -169,15 +251,14 @@ async function runSentimentAgent(symbol: string): Promise<AgentOutput> {
           agent: 'SENTIMENT',
           signal: score > 0.25 ? 'LONG' : score < -0.25 ? 'SHORT' : 'FLAT',
           confidence: conf,
-          detail: { score, headlines: headlines.slice(0, 3).join(' | ') },
-          rationale: obj.reason || `Sentiment score ${score.toFixed(2)} from ${headlines.length} headlines`,
+          detail: { score, headlines: headlines.slice(0, 3).join(' | '), provider: LLM_PROVIDER },
+          rationale: obj.reason || `Sentiment score ${score.toFixed(2)} from ${headlines.length} headlines (${LLM_PROVIDER})`,
           ts: Date.now(),
         }
       }
     }
   } catch (e: any) {
-    // Log the actual z-ai error so we can diagnose sandbox/session issues
-    console.error(`[sentiment] z-ai failed for ${symbol}:`, e?.message?.slice(0, 150) || String(e).slice(0, 150))
+    console.error(`[sentiment] LLM failed for ${symbol} (${LLM_PROVIDER}):`, e?.message?.slice(0, 150) || String(e).slice(0, 150))
   }
   // deterministic fallback: derive a mild sentiment from recent price momentum
   const candles = getCandles(symbol, 30)
@@ -305,14 +386,11 @@ async function runOrchestrator(symbol: string, agents: AgentOutput[]): Promise<{
     const agentSummary = agents.map((a) =>
       `${a.agent}: signal=${a.signal} conf=${(a.confidence * 100).toFixed(0)}% | ${a.rationale}`
     ).join('\n')
-    const completion = await withZAI((zai) => zai.chat.completions.create({
-      messages: [
-        { role: 'assistant', content: 'You are the orchestrator of a multi-agent crypto trading system. Given the outputs of specialist agents plus current market state, make the final trading decision. Be decisive but respect risk. Respond with ONLY JSON: {"signal":"LONG|SHORT|FLAT","confidence":0..1,"rationale":"<one sentence, mention which agents you weighted and why>"}' },
-        { role: 'user', content: `Symbol: ${symbol}\nCurrent position: ${pos ? pos.side + ' size=' + pos.size.toFixed(4) + ' entry=' + pos.entryPrice.toFixed(2) + ' unrealized=' + pos.unrealized.toFixed(2) : 'none'}\nEquity: $${port.equity.toFixed(2)} | Exposure: ${(port.exposure * 100).toFixed(1)}% | Drawdown: ${(port.drawdown * 100).toFixed(1)}%\nRecent closes: ${recent}\n\nAgent outputs:\n${agentSummary}\n\nDeterministic vote score: ${detScore.toFixed(2)} (${detSignal}). Output JSON only.` },
-      ],
-      thinking: { type: 'disabled' },
-    }))
-    const text = completion.choices[0]?.message?.content || ''
+    const result = await llmChat([
+      { role: 'assistant', content: 'You are the orchestrator of a multi-agent crypto trading system. Given the outputs of specialist agents plus current market state, make the final trading decision. Be decisive but respect risk. Respond with ONLY JSON: {"signal":"LONG|SHORT|FLAT","confidence":0..1,"rationale":"<one sentence, mention which agents you weighted and why>"}' },
+      { role: 'user', content: `Symbol: ${symbol}\nCurrent position: ${pos ? pos.side + ' size=' + pos.size.toFixed(4) + ' entry=' + pos.entryPrice.toFixed(2) + ' unrealized=' + pos.unrealized.toFixed(2) : 'none'}\nEquity: $${port.equity.toFixed(2)} | Exposure: ${(port.exposure * 100).toFixed(1)}% | Drawdown: ${(port.drawdown * 100).toFixed(1)}%\nRecent closes: ${recent}\n\nAgent outputs:\n${agentSummary}\n\nDeterministic vote score: ${detScore.toFixed(2)} (${detSignal}). Output JSON only.` },
+    ])
+    const text = result.content || ''
     const match = text.match(/\{[\s\S]*\}/)
     if (match) {
       const obj = JSON.parse(match[0])
@@ -321,17 +399,17 @@ async function runOrchestrator(symbol: string, agents: AgentOutput[]): Promise<{
         return {
           signal: sig,
           confidence: Math.max(0, Math.min(1, Number(obj.confidence) || 0.5)),
-          rationale: obj.rationale || 'LLM orchestrator decision',
+          rationale: obj.rationale || `LLM orchestrator decision (${LLM_PROVIDER})`,
         }
       }
     }
   } catch (e: any) {
-    console.error(`[orchestrator] z-ai failed for ${symbol}:`, e?.message?.slice(0, 150) || String(e).slice(0, 150))
+    console.error(`[orchestrator] LLM failed for ${symbol} (${LLM_PROVIDER}):`, e?.message?.slice(0, 150) || String(e).slice(0, 150))
   }
   return {
     signal: detSignal,
     confidence: Math.min(1, Math.abs(detScore) * 2),
-    rationale: `Deterministic weighted vote score ${detScore.toFixed(2)} (LLM unavailable). Weights: ML 35%, Tech 30%, Sentiment 20%, Risk 15%.`,
+    rationale: `Deterministic weighted vote score ${detScore.toFixed(2)} (LLM unavailable, ${LLM_PROVIDER}). Weights: ML 35%, Tech 30%, Sentiment 20%, Risk 15%.`,
   }
 }
 
@@ -406,28 +484,9 @@ async function runCycle() {
           }
         }
       } else {
-        // RATE-LIMIT OPTIMIZATION: run Technical + ML FIRST (no API calls),
-        // and only call the Sentiment LLM if they disagree or are weak.
-        // This cuts z-ai API calls by ~70% and avoids 429 rate-limiting.
-        const technical = runTechnicalAgent(symbol)
-        const ml = runMLAgent(symbol)
-        const techMlAgree = technical.signal === ml.signal && technical.signal !== 'FLAT'
-        const techMlStrong = Math.abs(technical.confidence) > 0.4 || Math.abs(ml.confidence) > 0.5
-        const cached = sentimentCache.get(symbol)
-        const cacheValid = cached && Date.now() - cached.ts < SENTIMENT_TTL
-        if (techMlAgree && techMlStrong && cacheValid) {
-          // skip sentiment LLM — tech + ML agree strongly + we have a cached sentiment
-          sentiment = {
-            agent: 'SENTIMENT',
-            signal: cached!.score > 0.25 ? 'LONG' : cached!.score < -0.25 ? 'SHORT' : 'FLAT',
-            confidence: 0.6,
-            detail: { score: cached!.score, source: 'cached' },
-            rationale: `Sentiment ${cached!.score.toFixed(2)} (cached — tech+ML agree, LLM skipped to save API quota)`,
-            ts: Date.now(),
-          }
-        } else {
-          sentiment = await runSentimentAgent(symbol)
-        }
+        // Sentiment ALWAYS runs — news is a crucial fundamental indicator.
+        // The 5-min cache prevents redundant API calls within the same cycle.
+        sentiment = await runSentimentAgent(symbol)
       }
       const technical = runTechnicalAgent(symbol)
       const ml = runMLAgent(symbol)
