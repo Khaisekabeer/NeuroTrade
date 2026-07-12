@@ -70,19 +70,25 @@ export interface BitgetTicker {
   quoteVolume24h: string
 }
 
-export const SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'] as const
+export const SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'ADA/USDT'] as const
 export type SymbolCode = (typeof SYMBOLS)[number]
 
 export const SYMBOL_TO_TV: Record<string, string> = {
   'BTC/USDT': 'BITGET:BTCUSDT',
   'ETH/USDT': 'BITGET:ETHUSDT',
   'SOL/USDT': 'BITGET:SOLUSDT',
+  'XRP/USDT': 'BITGET:XRPUSDT',
+  'DOGE/USDT': 'BITGET:DOGEUSDT',
+  'ADA/USDT': 'BITGET:ADAUSDT',
 }
 
 export const SYMBOL_TO_BITGET: Record<string, string> = {
   'BTC/USDT': 'BTCUSDT',
   'ETH/USDT': 'ETHUSDT',
   'SOL/USDT': 'SOLUSDT',
+  'XRP/USDT': 'XRPUSDT',
+  'DOGE/USDT': 'DOGEUSDT',
+  'ADA/USDT': 'ADAUSDT',
 }
 
 export const AGENT_ORDER: AgentName[] = ['SENTIMENT', 'TECHNICAL', 'ML', 'RISK', 'ORCHESTRATOR']

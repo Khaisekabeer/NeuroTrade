@@ -12,6 +12,9 @@ const SYMBOL_TO_BITGET_SPOT: Record<string, string> = {
   'BTC/USDT': 'BTCUSDT',
   'ETH/USDT': 'ETHUSDT',
   'SOL/USDT': 'SOLUSDT',
+  'XRP/USDT': 'XRPUSDT',
+  'DOGE/USDT': 'DOGEUSDT',
+  'ADA/USDT': 'ADAUSDT',
 }
 
 export function toBitgetSymbol(symbol: string): string {

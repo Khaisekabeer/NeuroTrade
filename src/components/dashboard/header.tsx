@@ -20,14 +20,19 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
 function Clock() {
-  const [now, setNow] = React.useState<Date>(new Date())
+  // Render a stable placeholder on the server + first client paint, then
+  // update with the real time only after hydration. This avoids the
+  // "server rendered text didn't match the client" hydration error caused
+  // by new Date() producing different values on server vs client.
+  const [now, setNow] = React.useState<Date | null>(null)
   React.useEffect(() => {
+    setNow(new Date())
     const iv = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(iv)
   }, [])
   return (
     <span className="tabular-nums text-zinc-300 font-mono text-sm">
-      {now.toLocaleTimeString('en-US', { hour12: false })}
+      {now ? now.toLocaleTimeString('en-US', { hour12: false }) : '--:--:--'}
     </span>
   )
 }

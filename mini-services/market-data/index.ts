@@ -31,6 +31,9 @@ const SYMS: Sym[] = [
   { symbol: 'BTC/USDT', base: 'BTC', price: 67250, drift: 0.00002, vol: 0.0009, meanRevert: 0.002, anchor: 67000, history: [], candles: [], currentCandle: null, volume24h: 18e9, open24h: 66500 },
   { symbol: 'ETH/USDT', base: 'ETH', price: 3480, drift: 0.00003, vol: 0.0011, meanRevert: 0.002, anchor: 3460, history: [], candles: [], currentCandle: null, volume24h: 9e9, open24h: 3440 },
   { symbol: 'SOL/USDT', base: 'SOL', price: 168.4, drift: 0.00005, vol: 0.0016, meanRevert: 0.003, anchor: 167, history: [], candles: [], currentCandle: null, volume24h: 3.5e9, open24h: 164 },
+  { symbol: 'XRP/USDT', base: 'XRP', price: 0.62, drift: 0.00004, vol: 0.0014, meanRevert: 0.003, anchor: 0.615, history: [], candles: [], currentCandle: null, volume24h: 1.2e9, open24h: 0.61 },
+  { symbol: 'DOGE/USDT', base: 'DOGE', price: 0.14, drift: 0.00005, vol: 0.0018, meanRevert: 0.003, anchor: 0.139, history: [], candles: [], currentCandle: null, volume24h: 0.8e9, open24h: 0.138 },
+  { symbol: 'ADA/USDT', base: 'ADA', price: 0.45, drift: 0.00004, vol: 0.0015, meanRevert: 0.003, anchor: 0.448, history: [], candles: [], currentCandle: null, volume24h: 0.6e9, open24h: 0.44 },
 ]
 
 const CANDLE_MS = 60_000 // 1 minute

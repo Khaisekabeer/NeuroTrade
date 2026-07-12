@@ -3,15 +3,10 @@ import { NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-// Bitget integration layer.
-// - Public market data (tickers, klines) is fetched LIVE from Bitget's public
-//   REST API (no auth required), so the "live Bitget" connection is genuine.
-// - Authenticated actions (balance, place order) require API keys. In this
-//   sandbox we never store secrets in the DB. If keys are present in env
-//   (BITGET_API_KEY / BITGET_API_SECRET / BITGET_API_PASSPHRASE), the route
-//   will build and send the real signed request; otherwise it returns the
-//   exact signed-request structure that the Python core (python-core/) would
-//   execute, so operators can see precisely what runs in production.
+// Bitget integration layer — supports BOTH spot and futures (USDT-margined
+// swaps). The productType is selectable per request via ?product=spot|futures
+// (default: spot). Public market data is fetched LIVE; authenticated actions
+// (balance, place order) require API keys in env vars.
 
 const BITGET_HOST = 'https://api.bitget.com'
 
@@ -19,7 +14,6 @@ function keysConfigured() {
   return !!(process.env.BITGET_API_KEY && process.env.BITGET_API_SECRET && process.env.BITGET_API_PASSPHRASE)
 }
 
-// HMAC-SHA256 signing for Bitget v2 (server time + method + requestPath + body)
 async function sign(timestamp: string, method: string, requestPath: string, body: string) {
   const crypto = await import('crypto')
   const secret = process.env.BITGET_API_SECRET!
@@ -29,12 +23,10 @@ async function sign(timestamp: string, method: string, requestPath: string, body
 
 async function bitgetPublic(path: string) {
   const res = await fetch(`${BITGET_HOST}${path}`, { headers: { 'Content-Type': 'application/json' }, cache: 'no-store' })
-  const data = await res.json()
-  return data
+  return res.json()
 }
 
 async function bitgetSigned(method: string, requestPath: string, body: string) {
-  const crypto = await import('crypto')
   const ts = Date.now().toString()
   const signStr = await sign(ts, method, requestPath, body)
   const headers = {
@@ -49,9 +41,22 @@ async function bitgetSigned(method: string, requestPath: string, body: string) {
   return res.json()
 }
 
+// Normalize the product param. Bitget v2 uses:
+//   spot    → /api/v2/spot/...
+//   futures → /api/v2/mix/...  (USDT-margined swaps, productType=USDT-FUTURES)
+function productPath(product: string): 'spot' | 'mix' {
+  return product === 'futures' ? 'mix' : 'spot'
+}
+function productType(product: string): string {
+  return product === 'futures' ? 'USDT-FUTURES' : 'SPOT'
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const action = searchParams.get('action') || 'status'
+  const product = searchParams.get('product') || 'spot' // spot | futures
+  const p = productPath(product)
+  const pt = productType(product)
   try {
     if (action === 'status') {
       return NextResponse.json({
@@ -59,37 +64,76 @@ export async function GET(req: Request) {
         host: BITGET_HOST,
         publicApi: true,
         authenticatedApi: keysConfigured(),
+        product,
         message: keysConfigured()
-          ? 'Bitget API keys detected — authenticated trading enabled.'
-          : 'Public market data is LIVE. Add BITGET_API_KEY / SECRET / PASSPHRASE env vars to enable live order execution.',
+          ? `Bitget API keys detected — ${product} trading enabled.`
+          : `Public ${product} market data is LIVE. Add BITGET_API_KEY / SECRET / PASSPHRASE env vars to enable live order execution.`,
       })
     }
     if (action === 'tickers') {
-      // REAL live tickers from Bitget public API
       const symbols = (searchParams.get('symbols') || 'BTCUSDT,ETHUSDT,SOLUSDT').split(',').filter(Boolean)
       const sym = symbols.join(',')
-      const data = await bitgetPublic(`/api/v2/spot/market/tickers?symbols=${encodeURIComponent(sym)}`)
-      return NextResponse.json({ live: true, source: 'bitget-public', data })
+      const path = p === 'spot'
+        ? `/api/v2/spot/market/tickers?symbols=${encodeURIComponent(sym)}`
+        : `/api/v2/mix/market/tickers?productType=${pt}&symbol=${encodeURIComponent(symbols[0])}`
+      const data = await bitgetPublic(path)
+      return NextResponse.json({ live: true, source: `bitget-public-${product}`, product, data })
     }
     if (action === 'klines') {
       const symbol = searchParams.get('symbol') || 'BTCUSDT'
       const granularity = searchParams.get('granularity') || '1m'
       const limit = searchParams.get('limit') || '200'
-      const data = await bitgetPublic(`/api/v2/spot/market/candles?symbol=${symbol}&granularity=${granularity}&limit=${limit}`)
-      return NextResponse.json({ live: true, source: 'bitget-public', symbol, data })
+      const path = p === 'spot'
+        ? `/api/v2/spot/market/candles?symbol=${symbol}&granularity=${granularity}&limit=${limit}`
+        : `/api/v2/mix/market/candles?productType=${pt}&symbol=${symbol}&granularity=${granularity}&limit=${limit}`
+      const data = await bitgetPublic(path)
+      return NextResponse.json({ live: true, source: `bitget-public-${product}`, symbol, product, data })
     }
     if (action === 'balance') {
       if (!keysConfigured()) {
         return NextResponse.json({
           live: false,
           configured: false,
-          message: 'API keys not set. In production the Python core calls: GET /api/v2/spot/account/info with HMAC-SHA256 signed headers (ACCESS-KEY, ACCESS-SIGN, ACCESS-TIMESTAMP, ACCESS-PASSPHRASE).',
-          requestPath: '/api/v2/spot/account/info',
-          method: 'GET',
-        })
+          message: `API keys not set. In production this calls GET /api/v2/${p}/account/${p === 'spot' ? 'info' : 'accounts'} with HMAC-SHA256 signed headers.`,
+          product,
+        }, { status: 400 })
       }
-      const data = await bitgetSigned('GET', '/api/v2/spot/account/info', '')
-      return NextResponse.json({ live: true, configured: true, data })
+      // spot → /api/v2/spot/account/info (returns assets array)
+      // futures → /api/v2/mix/account/accounts?productType=USDT-FUTURES (returns accounts)
+      const requestPath = p === 'spot'
+        ? '/api/v2/spot/account/info'
+        : `/api/v2/mix/account/accounts?productType=${pt}`
+      const data = await bitgetSigned('GET', requestPath, '')
+      // Normalize the response into a simple { assets: [{coin, available, frozen, total}] } shape
+      let assets: any[] = []
+      if (p === 'spot' && data?.data?.length) {
+        assets = data.data.map((a: any) => ({
+          coin: a.coin,
+          available: parseFloat(a.available || a.free || '0'),
+          frozen: parseFloat(a.frozen || a.locked || '0'),
+          total: parseFloat(a.total || a.balance || '0'),
+        }))
+      } else if (p === 'mix' && data?.data?.length) {
+        for (const a of data.data) {
+          assets.push({
+            coin: a.marginCoin || 'USDT',
+            available: parseFloat(a.available || '0'),
+            frozen: parseFloat(a.frozen || '0'),
+            total: parseFloat(a.equity || a.available || '0'),
+            margin: parseFloat(a.margin || '0'),
+            unrealizedPL: parseFloat(a.unrealizedPL || '0'),
+          })
+        }
+      }
+      return NextResponse.json({ live: true, configured: true, product, assets, raw: data })
+    }
+    if (action === 'positions') {
+      // futures only — open positions
+      if (!keysConfigured()) {
+        return NextResponse.json({ live: false, configured: false, message: 'API keys not set' }, { status: 400 })
+      }
+      const data = await bitgetSigned('GET', `/api/v2/mix/position/current-position?productType=${pt}`, '')
+      return NextResponse.json({ live: true, configured: true, product, data })
     }
     return NextResponse.json({ error: 'unknown action' }, { status: 400 })
   } catch (e: any) {
@@ -99,10 +143,9 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}))
-  // body.kind controls what kind of order:
-  //   'market' (default) — normal market/limit order via place-order
-  //   'plan'             — trigger/stop order via place-plan-order (for SL/TP)
-  //   'cancel'           — cancel an existing order
+  const product = body.product || 'spot'
+  const p = productPath(product)
+  const pt = productType(product)
   const kind = body.kind || 'market'
 
   if (!keysConfigured()) {
@@ -114,47 +157,69 @@ export async function POST(req: Request) {
   }
 
   try {
-    // ---- CANCEL an existing order ----
     if (kind === 'cancel') {
-      const requestPath = '/api/v2/spot/trade/cancel-order'
-      const payload = JSON.stringify({ symbol: body.symbol, orderId: body.orderId })
+      const requestPath = p === 'spot'
+        ? '/api/v2/spot/trade/cancel-order'
+        : `/api/v2/mix/order/cancel-order?productType=${pt}`
+      const payload = p === 'spot'
+        ? JSON.stringify({ symbol: body.symbol, orderId: body.orderId })
+        : JSON.stringify({ symbol: body.symbol, orderId: body.orderId, productType: pt })
       const data = await bitgetSigned('POST', requestPath, payload)
-      return NextResponse.json({ live: true, configured: true, action: 'cancel', data })
+      return NextResponse.json({ live: true, configured: true, product, action: 'cancel', data })
     }
 
-    // ---- PLAN ORDER (stop-loss / take-profit trigger) ----
-    // Bitget v2 spot plan order. triggerType:
-    //   'fill_price'  — trigger on last price
-    //   'mark_price'  — trigger on mark price
-    // executePrice: for limit trigger orders; omit for market execution
     if (kind === 'plan') {
-      const requestPath = '/api/v2/spot/trade/place-plan-order'
-      const payload = JSON.stringify({
-        symbol: body.symbol,
-        side: body.side,                 // 'buy' or 'sell'
-        orderType: body.orderType || 'limit',  // 'limit' or 'market'
-        triggerPrice: String(body.triggerPrice),
-        executePrice: body.executePrice ? String(body.executePrice) : undefined,
-        size: String(body.size),
-        triggerType: body.triggerType || 'fill_price',
-        force: 'gtc',
-      })
+      // SL/TP trigger order
+      const requestPath = p === 'spot'
+        ? '/api/v2/spot/trade/place-plan-order'
+        : `/api/v2/mix/order/place-plan-order?productType=${pt}`
+      const payload = p === 'spot'
+        ? JSON.stringify({
+            symbol: body.symbol, side: body.side,
+            orderType: body.orderType || 'limit',
+            triggerPrice: String(body.triggerPrice),
+            executePrice: body.executePrice ? String(body.executePrice) : undefined,
+            size: String(body.size),
+            triggerType: body.triggerType || 'fill_price',
+            force: 'gtc',
+          })
+        : JSON.stringify({
+            symbol: body.symbol, side: body.side,
+            orderType: body.orderType || 'limit',
+            triggerPrice: String(body.triggerPrice),
+            executePrice: body.executePrice ? String(body.executePrice) : undefined,
+            size: String(body.size),
+            triggerType: body.triggerType || 'fill_price',
+            productType: pt,
+            force: 'gtc',
+          })
       const data = await bitgetSigned('POST', requestPath, payload)
-      return NextResponse.json({ live: true, configured: true, action: 'plan', data })
+      return NextResponse.json({ live: true, configured: true, product, action: 'plan', data })
     }
 
-    // ---- MARKET / LIMIT order (entry or manual close) ----
-    const requestPath = '/api/v2/spot/trade/place-order'
-    const payload = JSON.stringify({
-      symbol: body.symbol,
-      side: body.side,                 // 'buy' or 'sell'
-      orderType: body.orderType || 'market',
-      size: String(body.size),
-      ...(body.price ? { price: String(body.price) } : {}),
-      force: body.force || 'gtc',
-    })
+    // market/limit entry order
+    const requestPath = p === 'spot'
+      ? '/api/v2/spot/trade/place-order'
+      : `/api/v2/mix/order/place-order?productType=${pt}`
+    const payload = p === 'spot'
+      ? JSON.stringify({
+          symbol: body.symbol, side: body.side,
+          orderType: body.orderType || 'market',
+          size: String(body.size),
+          ...(body.price ? { price: String(body.price) } : {}),
+          force: body.force || 'gtc',
+        })
+      : JSON.stringify({
+          symbol: body.symbol, side: body.side,
+          orderType: body.orderType || 'market',
+          size: String(body.size),
+          ...(body.price ? { price: String(body.price) } : {}),
+          productType: pt,
+          tradeSide: body.tradeSide || (body.side === 'buy' ? 'open' : 'close'),
+          force: body.force || 'gtc',
+        })
     const data = await bitgetSigned('POST', requestPath, payload)
-    return NextResponse.json({ live: true, configured: true, action: 'market', data })
+    return NextResponse.json({ live: true, configured: true, product, action: 'market', data })
   } catch (e: any) {
     return NextResponse.json({ live: false, error: e?.message || 'bitget request failed' }, { status: 502 })
   }
