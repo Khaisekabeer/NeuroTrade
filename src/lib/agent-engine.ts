@@ -36,7 +36,7 @@ interface ChatResult { content: string }
 
 let zaiPromise: Promise<any> | null = null
 let zaiFailedAt = 0
-const ZAI_RETRY_MS = 30_000
+const ZAI_RETRY_MS = 10_000 // 10s cooldown after 429 (fast recovery)
 
 async function getZAI() {
   if (zaiPromise === null && zaiFailedAt && Date.now() - zaiFailedAt < ZAI_RETRY_MS) {

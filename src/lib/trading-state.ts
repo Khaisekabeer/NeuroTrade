@@ -642,6 +642,34 @@ export function bumpCycle() { state.cycle++; return state.cycle }
 // while the DB still held the real open positions — a dangerous mismatch.
 export async function restoreFromDb() {
   try {
+    // 0. Load persisted trading symbols from DB. If the DB is empty (first run),
+    // seed it with the default symbols. This replaces the hardcoded list so
+    // add/remove survives restarts.
+    const dbSymbols = await db.tradingSymbol.findMany({ orderBy: { createdAt: 'asc' } })
+    if (dbSymbols.length > 0) {
+      // Clear the default hardcoded list and load from DB
+      TRADE_SYMBOLS.length = 0
+      for (const s of dbSymbols) {
+        TRADE_SYMBOLS.push({
+          symbol: s.symbol, name: s.name, base: s.base,
+          price: s.price, change24h: 0, volume24h: 0,
+        })
+        // seed the tick + candle buffer for each persisted symbol
+        seedNewSymbol(s.symbol, s.price || 1)
+      }
+      console.log(`[restoreFromDb] loaded ${dbSymbols.length} symbols from DB: ${TRADE_SYMBOLS.map(s => s.symbol).join(', ')}`)
+    } else {
+      // First run — persist the default symbols to DB
+      for (const s of TRADE_SYMBOLS) {
+        await db.tradingSymbol.upsert({
+          where: { symbol: s.symbol },
+          create: { symbol: s.symbol, name: s.name, base: s.base, price: s.price },
+          update: {},
+        }).catch(() => {})
+      }
+      console.log(`[restoreFromDb] seeded ${TRADE_SYMBOLS.length} default symbols to DB`)
+    }
+
     // 1. reload open positions into memory — but only for symbols still in
     //    the active trading list. Positions for removed symbols are skipped
     //    (they should have been closed when the symbol was removed).

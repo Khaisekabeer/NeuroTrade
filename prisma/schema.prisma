@@ -82,6 +82,18 @@ model PortfolioSnapshot {
   createdAt DateTime @default(now())
 }
 
+// Persisted trading symbols — survives restarts.
+// When you add/remove tickers via Manage Tickers, they're saved here.
+// On startup, TRADE_SYMBOLS is populated from this table (not hardcoded).
+model TradingSymbol {
+  id        String   @id @default(cuid())
+  symbol    String   @unique  // e.g. "BTC/USDT"
+  name      String             // e.g. "Bitcoin"
+  base      String             // e.g. "BTC"
+  price     Float    @default(0)
+  createdAt DateTime @default(now())
+}
+
 model RiskSettings {
   id              String  @id @default("default")
   maxRiskPerTrade Float   @default(0.02)   // 2% of equity
