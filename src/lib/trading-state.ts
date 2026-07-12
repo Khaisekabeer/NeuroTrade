@@ -9,7 +9,7 @@ import { io } from 'socket.io-client'
 import { db } from './db'
 import type {
   Candle, Position, Trade, Portfolio, RiskSettings, OrchestratorDecision,
-  AgentOutput, Signal, TradeSide,
+  AgentOutput, Signal, TradeSide, TradeStatus,
 } from './types'
 import { TRADE_SYMBOLS } from './types'
 import { placeMarketEntry, placeStopOrder, cancelOrder, fetchLiveTickers, fetchLiveKlines } from './bitget-executor'
@@ -264,7 +264,6 @@ export async function setMode(mode: TradingMode) {
           state.portfolio.realizedPnl = 0
           state.portfolio.openPnl = 0
           state.portfolio.exposure = 0
-          state.portfolio.drawdown = 0
           state.portfolio.dayPnl = 0
           state.portfolio.dayPnlPct = 0
           state.peakEquity = realBalance
@@ -488,7 +487,7 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
   const closed = state.trades.filter((tr) => tr.status === 'CLOSED')
   const wins = closed.filter((tr) => (tr.pnl ?? 0) > 0).length
   state.portfolio.winRate = closed.length ? wins / closed.length : 0
-  return trade
+  return trade ?? null
 }
 
 // check stops/takes on each tick — returns closed trades

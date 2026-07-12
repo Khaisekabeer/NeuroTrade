@@ -354,7 +354,7 @@ function runRiskAgent(symbol: string, direction: Signal): AgentOutput {
     detail: {
       exposure: port.exposure, maxExposure: risk.maxTotalExposure,
       drawdown: port.drawdown, maxDrawdown: risk.maxDrawdown,
-      atrPct, kellyFraction: kelly, allowed,
+      atrPct, kellyFraction: kelly, allowed: allowed ? 1 : 0,
     },
     rationale: allowed
       ? `Exposure ${(port.exposure * 100).toFixed(1)}%/${(risk.maxTotalExposure * 100).toFixed(0)}% | DD ${(port.drawdown * 100).toFixed(1)}%/${(risk.maxDrawdown * 100).toFixed(0)}% | ATR ${atrPct.toFixed(3)} | Kelly f=${kelly.toFixed(3)}`
@@ -517,7 +517,8 @@ async function runCycle() {
       // tentative direction from the first three
       const tentative: Signal = (() => {
         const dirs = [sentiment, technical, ml].map((a) => (a.signal === 'LONG' ? 1 : a.signal === 'SHORT' ? -1 : 0))
-        const avg = dirs.reduce((a, b) => a + b, 0) / dirs.length
+        const sum = dirs.reduce((a: number, b: number) => a + b, 0)
+        const avg = sum / dirs.length
         return avg > 0.1 ? 'LONG' : avg < -0.1 ? 'SHORT' : 'FLAT'
       })()
       const risk = runRiskAgent(symbol, tentative)
@@ -529,7 +530,7 @@ async function runCycle() {
       // it can be 0 when the Kelly fraction is tiny even if the gate is open.
       // We check the actual gate conditions from the risk agent's detail.
       const allFlat = sentiment.signal === 'FLAT' && technical.signal === 'FLAT' && ml.signal === 'FLAT'
-      const riskActuallyBlocked = risk.detail?.allowed === false
+      const riskActuallyBlocked = risk.detail?.allowed === 0
       const tentativeIsFlat = tentative === 'FLAT'
       let orchestrator
       if (riskActuallyBlocked || (allFlat && tentativeIsFlat)) {
@@ -543,11 +544,15 @@ async function runCycle() {
         }
         const score = wsum > 0 ? vote / wsum : 0
         const sig: Signal = score > 0.2 ? 'LONG' : score < -0.2 ? 'SHORT' : 'FLAT'
+        const dd = (risk.detail?.drawdown as number) || 0
+        const mdraw = (risk.detail?.maxDrawdown as number) || 0
+        const exp = (risk.detail?.exposure as number) || 0
+        const mexpo = (risk.detail?.maxExposure as number) || 0
         orchestrator = {
           signal: sig,
           confidence: Math.min(1, Math.abs(score) * 2),
           rationale: riskActuallyBlocked
-            ? `Risk gate closed — DD ${(risk.detail?.drawdown * 100).toFixed(1)}%/${(risk.detail?.maxDrawdown * 100).toFixed(0)}% or exposure ${(risk.detail?.exposure * 100).toFixed(1)}%/${(risk.detail?.maxExposure * 100).toFixed(0)}%. (deterministic vote: ${score.toFixed(2)})`
+            ? `Risk gate closed — DD ${(dd * 100).toFixed(1)}%/${(mdraw * 100).toFixed(0)}% or exposure ${(exp * 100).toFixed(1)}%/${(mexpo * 100).toFixed(0)}%. (deterministic vote: ${score.toFixed(2)})`
             : `All specialists FLAT — no trade. (deterministic vote: ${score.toFixed(2)})`,
         }
       } else {
