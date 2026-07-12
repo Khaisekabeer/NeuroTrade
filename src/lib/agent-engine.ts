@@ -499,13 +499,16 @@ async function runCycle() {
       const risk = runRiskAgent(symbol, tentative)
 
       // OPTIMIZATION: skip the orchestrator LLM call when the risk gate is
-      // closed OR all specialist agents agree on FLAT. This cuts API calls by
-      // ~60% and avoids rate-limit (429) errors. The deterministic vote is
-      // sufficient in these cases.
+      // ACTUALLY closed (drawdown/exposure at limit) OR all specialist agents
+      // agree on FLAT. This cuts API calls + avoids rate-limit errors.
+      // NOTE: risk.confidence === 0 alone is NOT a reliable "blocked" signal —
+      // it can be 0 when the Kelly fraction is tiny even if the gate is open.
+      // We check the actual gate conditions from the risk agent's detail.
       const allFlat = sentiment.signal === 'FLAT' && technical.signal === 'FLAT' && ml.signal === 'FLAT'
-      const riskBlocked = risk.signal === 'FLAT' && risk.confidence === 0
+      const riskActuallyBlocked = risk.detail?.allowed === false
+      const tentativeIsFlat = tentative === 'FLAT'
       let orchestrator
-      if (allFlat || riskBlocked) {
+      if (riskActuallyBlocked || (allFlat && tentativeIsFlat)) {
         // use deterministic vote directly — no LLM call needed
         const weights: Record<string, number> = { SENTIMENT: 0.2, TECHNICAL: 0.3, ML: 0.35, RISK: 0.15 }
         let vote = 0, wsum = 0
@@ -519,9 +522,9 @@ async function runCycle() {
         orchestrator = {
           signal: sig,
           confidence: Math.min(1, Math.abs(score) * 2),
-          rationale: riskBlocked
-            ? `Risk gate closed — no new positions. DD at limit. (LLM skipped, deterministic vote: ${score.toFixed(2)})`
-            : `All specialists FLAT — no trade. (LLM skipped, deterministic vote: ${score.toFixed(2)})`,
+          rationale: riskActuallyBlocked
+            ? `Risk gate closed — DD ${(risk.detail?.drawdown * 100).toFixed(1)}%/${(risk.detail?.maxDrawdown * 100).toFixed(0)}% or exposure ${(risk.detail?.exposure * 100).toFixed(1)}%/${(risk.detail?.maxExposure * 100).toFixed(0)}%. (deterministic vote: ${score.toFixed(2)})`
+            : `All specialists FLAT — no trade. (deterministic vote: ${score.toFixed(2)})`,
         }
       } else {
         orchestrator = await runOrchestrator(symbol, [sentiment, technical, ml, risk])
