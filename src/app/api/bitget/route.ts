@@ -289,8 +289,9 @@ export async function POST(req: Request) {
           marginMode: futuresMarginMode,
           marginCoin: body.marginCoin || 'USDT',
           tradeSide: body.tradeSide || (body.side === 'buy' ? 'open' : 'close'),
-          // reduceOnly: only include for closing orders (Bitget rejects reduceOnly:false)
-          ...(body.tradeSide === 'close' ? { reduceOnly: true } : {}),
+          // NOTE: Bitget futures uses tradeSide:'close' to close positions.
+          // Do NOT send reduceOnly — it's a spot-only field and Bitget futures
+          // rejects it with '40017: Parameter verification failed reduceOnly'.
           force: body.force || 'gtc',
         })
     const data = await bitgetSigned('POST', requestPath, payload)
