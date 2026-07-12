@@ -178,6 +178,7 @@ export async function GET(req: Request) {
       const payload = JSON.stringify({
         symbol,
         marginMode,  // 'isolated' or 'crossed'
+        marginCoin: 'USDT',  // required for USDT-margined futures
         leverage: String(leverage),
         productType: pt,
       })
@@ -192,7 +193,7 @@ export async function GET(req: Request) {
       const symbol = searchParams.get('symbol') || 'BTCUSDT'
       const marginMode = searchParams.get('marginMode') === 'cross' ? 'crossed' : 'isolated'
       const requestPath = `/api/v2/mix/account/set-margin-mode?productType=${pt}`
-      const payload = JSON.stringify({ symbol, marginMode, productType: pt })
+      const payload = JSON.stringify({ symbol, marginMode, marginCoin: 'USDT', productType: pt })
       const data = await bitgetSigned('POST', requestPath, payload)
       return NextResponse.json({ live: true, configured: true, product, action: 'set-margin-mode', data })
     }
