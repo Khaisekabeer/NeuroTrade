@@ -36,6 +36,7 @@ interface State {
   mode: TradingMode
   livePriceTimer: NodeJS.Timeout | null
   liveTickerLoaded: boolean
+  lastLiveError: string | null
 }
 
 function seedPrices(): Map<string, { price: number; ts: number; bid: number; ask: number; volume24h: number; change24h: number }> {
@@ -117,6 +118,7 @@ const state: State = (g.__ND_STATE__ ??= {
   mode: 'paper',
   livePriceTimer: null,
   liveTickerLoaded: false,
+  lastLiveError: null,
 })
 
 // wire up socket client to market microservice (also globalThis-guarded)
@@ -389,6 +391,7 @@ export async function openPosition(symbol: string, side: TradeSide, size: number
     })
     if (!entry.ok) {
       console.error('[live] entry order failed:', entry.error)
+      state.lastLiveError = entry.error || 'Bitget rejected the order'
       return null
     }
     liveEntryOrderId = entry.orderId
@@ -614,6 +617,11 @@ export async function manualOpen(symbol: string, side: TradeSide, riskPct: numbe
   const tp = side === 'LONG' ? price + stopDist * 2 : price - stopDist * 2
   const trade = await openPosition(symbol, side, size, sl, tp, 1, 'Manual override by operator')
   if (!trade) {
+    if (state.mode === 'live' && state.lastLiveError) {
+      const err = state.lastLiveError
+      state.lastLiveError = null
+      return { ok: false, error: err }
+    }
     return { ok: false, error: state.mode === 'live' ? 'Bitget rejected the order — check API Monitor panel for details' : 'Open position failed — check equity, exposure, or drawdown limit' }
   }
   return { ok: true, trade }

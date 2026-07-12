@@ -58,9 +58,18 @@ export async function placeMarketEntry(
       product: opts?.product || 'spot',
       tradeSide: opts?.tradeSide || (bitgetSide === 'buy' ? 'open' : 'close'),
     })
-    if (!data?.live) return { ok: false, error: data?.message || data?.error || 'order rejected' }
-    const orderId = data?.data?.orderId || data?.data?.data?.orderId || data?.data?.result?.orderId
-    return { ok: true, orderId, data: data.data }
+    if (!data?.live) return { ok: false, error: data?.message || data?.error || 'order rejected (no live response)' }
+    // Bitget success: { code: "00000", msg: "success", data: { orderId } }
+    // Bitget error:   { code: "11001", msg: "size too small", data: null }
+    const bg = data?.data
+    if (bg?.code && bg.code !== '00000') {
+      return { ok: false, error: `Bitget ${bg.code}: ${bg.msg || 'rejected'}`, data: bg }
+    }
+    const orderId = bg?.data?.orderId || bg?.orderId || bg?.result?.orderId
+    if (!orderId) {
+      return { ok: false, error: `Bitget response missing orderId: ${JSON.stringify(bg).slice(0, 200)}`, data: bg }
+    }
+    return { ok: true, orderId, data: bg }
   } catch (e: any) {
     return { ok: false, error: e?.message }
   }
