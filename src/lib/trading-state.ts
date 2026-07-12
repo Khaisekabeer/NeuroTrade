@@ -362,22 +362,28 @@ export async function openPosition(symbol: string, side: TradeSide, size: number
   if (!t) return null
   const price = side === 'LONG' ? t.ask : t.bid
   // Derivatives/margin model: cash is collateral, not debited by notional.
-  // Margin check: total notional after this trade must fit equity * leverageCap.
+  // The max notional is equity × leverage (for futures) or equity (for spot).
   updateUnrealized()
   const equity = state.portfolio.equity
   if (equity <= 0) return null
+  const leverage = state.risk.product === 'futures' ? Math.min(state.risk.leverage, state.risk.leverageCap) : 1
   let currentNotional = 0
   for (const p of state.positions.values()) {
     const px = state.ticks.get(p.symbol)?.price ?? p.entryPrice
     currentNotional += p.size * px
   }
-  const availableNotional = equity * state.risk.leverageCap - currentNotional
+  const maxNotional = equity * leverage
+  const availableNotional = maxNotional - currentNotional
   if (availableNotional <= 0) return null
   let notional = size * price
   if (notional > availableNotional) {
     size = availableNotional / price
     notional = size * price
     if (size <= 0) return null
+  }
+  // For futures: round to whole contracts (Bitget minimum is 1 contract)
+  if (state.risk.product === 'futures') {
+    size = Math.max(1, Math.floor(size))
   }
 
   // ---- LIVE MODE: place real orders on Bitget ----
