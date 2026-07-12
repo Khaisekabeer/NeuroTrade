@@ -434,8 +434,29 @@ async function executeDecision(symbol: string, decision: { signal: Signal; confi
   const risk = getRisk()
   const riskAmt = port.equity * risk.maxRiskPerTrade * decision.confidence
   const stopDist = Math.max(atr * 1.5, price * 0.008)
-  const size = riskAmt / stopDist
+  let size = riskAmt / stopDist
   if (size <= 0) return
+
+  // EXPOSURE CAP: ensure this new position's notional + existing notional
+  // does not exceed equity * maxTotalExposure. This prevents the bot from
+  // opening huge positions (e.g. 2 million DOGE) that push exposure to 400%+.
+  const existingNotional = port.positions.reduce((s, p) => {
+    const px = getCandles(p.symbol, 2)[getCandles(p.symbol, 2).length - 1]?.close ?? p.entryPrice
+    return s + p.size * px
+  }, 0)
+  const maxNotional = port.equity * risk.maxTotalExposure
+  const availableNotional = maxNotional - existingNotional
+  if (availableNotional <= 0) {
+    console.log(`[execute] ${symbol}: exposure cap reached (${(port.exposure * 100).toFixed(1)}%/${(risk.maxTotalExposure * 100).toFixed(0)}%) — skipping`)
+    return
+  }
+  const newNotional = size * price
+  if (newNotional > availableNotional) {
+    size = availableNotional / price
+    console.log(`[execute] ${symbol}: resized from ${riskAmt / stopDist} to ${size} to fit exposure cap`)
+  }
+  if (size <= 0) return
+
   const side: TradeSide = decision.signal === 'LONG' ? 'LONG' : 'SHORT'
   const sl = side === 'LONG' ? price - stopDist : price + stopDist
   const tp = side === 'LONG' ? price + stopDist * 2.2 : price - stopDist * 2.2
