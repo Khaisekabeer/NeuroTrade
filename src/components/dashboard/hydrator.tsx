@@ -33,6 +33,11 @@ export function DashboardHydrator() {
     let mounted = true
 
     // ---- WebSocket to market microservice (port 3003 via gateway) ----
+    // NOTE: the market microservice may be briefly down (sandbox reaps idle
+    // processes). When that happens the WS connection fails noisily in the
+    // browser console — but the REST polling loop below (/api/ticks every
+    // 2.5s) keeps the dashboard fully functional. We limit reconnection
+    // attempts to avoid console spam, and auto-reconnect silently.
     let pendingTicks: Record<string, { symbol: string; price: number; ts: number }> = {}
     let tickFlushTimer: ReturnType<typeof setTimeout> | null = null
     try {
@@ -41,7 +46,9 @@ export function DashboardHydrator() {
         transports: ['websocket'],
         query: { XTransformPort: '3003' },
         reconnection: true,
-        reconnectionAttempts: Infinity,
+        reconnectionAttempts: 10,    // stop spamming after 10 tries
+        reconnectionDelay: 2000,
+        reconnectionDelayMax: 10000,
         timeout: 4000,
       })
       socket.on('connect', () => {
@@ -50,7 +57,13 @@ export function DashboardHydrator() {
       socket.on('disconnect', () => {
         if (mounted) useDashboard.getState().setWsConnected(false)
       })
+      // suppress connect_error from flooding the console — it's expected when
+      // the market microservice is down; REST polling handles the data
       socket.on('connect_error', () => {
+        if (mounted) useDashboard.getState().setWsConnected(false)
+      })
+      socket.io.on('reconnect_failed', () => {
+        // give up quietly — REST polling takes over
         if (mounted) useDashboard.getState().setWsConnected(false)
       })
       socket.on('tick', (t: { symbol: string; price: number; ts: number }) => {
