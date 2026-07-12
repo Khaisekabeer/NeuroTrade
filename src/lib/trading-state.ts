@@ -642,9 +642,18 @@ export function bumpCycle() { state.cycle++; return state.cycle }
 // while the DB still held the real open positions — a dangerous mismatch.
 export async function restoreFromDb() {
   try {
-    // 1. reload open positions into memory
+    // 1. reload open positions into memory — but only for symbols still in
+    //    the active trading list. Positions for removed symbols are skipped
+    //    (they should have been closed when the symbol was removed).
     const dbPositions = await db.position.findMany()
     for (const p of dbPositions) {
+      // Skip positions for symbols that are no longer in the active list
+      if (!TRADE_SYMBOLS.find((s) => s.symbol === p.symbol)) {
+        console.log(`[restoreFromDb] skipping ${p.symbol} position — symbol removed from active list`)
+        // delete the stale position from the DB
+        await db.position.deleteMany({ where: { symbol: p.symbol } }).catch(() => {})
+        continue
+      }
       state.positions.set(p.symbol, {
         symbol: p.symbol,
         side: p.side as TradeSide,

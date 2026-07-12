@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { TRADE_SYMBOLS, addSymbol, removeSymbol } from '@/lib/types'
 import { fetchLiveTickers } from '@/lib/bitget-executor'
-import { seedNewSymbol } from '@/lib/trading-state'
+import { seedNewSymbol, manualClose } from '@/lib/trading-state'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -23,8 +23,15 @@ export async function POST(req: Request) {
   const bgSym = symbol.replace('/', '')  // AVAXUSDT
 
   if (action === 'remove') {
+    // Close any open position for this symbol BEFORE removing it from the list.
+    // This prevents the bot from trading a removed symbol via leftover positions.
+    try {
+      await manualClose(symbol)
+    } catch (e) {
+      // ignore — may not have an open position
+    }
     removeSymbol(symbol)
-    return NextResponse.json({ ok: true, symbols: TRADE_SYMBOLS, message: `Removed ${symbol}` })
+    return NextResponse.json({ ok: true, symbols: TRADE_SYMBOLS, message: `Removed ${symbol} (position closed if open)` })
   }
 
   if (action === 'add') {
