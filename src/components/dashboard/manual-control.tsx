@@ -91,6 +91,29 @@ export function ManualControl() {
     }
   }
 
+  async function closeAll() {
+    setBusy('closeAll')
+    try {
+      const res = await fetch('/api/trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'closeAll' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (data?.ok) {
+        toast.success(`Closed ${data.closed} position(s)`, {
+          description: data.errors?.length ? `Errors: ${data.errors.join('; ')}` : 'All positions closed',
+        })
+      } else {
+        toast.error('Close all failed', { description: data?.error })
+      }
+    } catch (e: any) {
+      toast.error('Close all failed', { description: e?.message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function reset() {
     setBusy('reset')
     try {
@@ -180,10 +203,18 @@ export function ManualControl() {
         <button
           onClick={() => act('close')}
           disabled={!!busy}
-          className={cn(btn, 'col-span-2 border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20')}
+          className={cn(btn, 'border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20')}
         >
           {busy === 'close' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
           Close {activeSymbol}
+        </button>
+        <button
+          onClick={closeAll}
+          disabled={!!busy}
+          className={cn(btn, 'border border-rose-600/60 bg-rose-600/20 text-rose-200 hover:bg-rose-600/30 font-bold')}
+        >
+          {busy === 'closeAll' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+          Close ALL
         </button>
         <AlertDialog>
           <AlertDialogTrigger asChild>

@@ -719,6 +719,23 @@ export async function restoreFromDb() {
 
 // manual override (for UI controls)
 export async function manualClose(symbol: string) { return closePosition(symbol, 'manual') }
+
+// Close ALL open positions at once — used by the "Close All" button +
+// when removing tickers to clean up stuck positions.
+export async function closeAllPositions(): Promise<{ ok: boolean; closed: number; errors: string[] }> {
+  const errors: string[] = []
+  let closed = 0
+  const symbols = Array.from(state.positions.keys())
+  for (const symbol of symbols) {
+    try {
+      const t = await closePosition(symbol, 'close-all')
+      if (t) closed++
+    } catch (e: any) {
+      errors.push(`${symbol}: ${e?.message || 'failed'}`)
+    }
+  }
+  return { ok: true, closed, errors }
+}
 export async function manualOpen(symbol: string, side: TradeSide, riskPct: number): Promise<{ ok: boolean; trade?: Trade | null; error?: string }> {
   const t = state.ticks.get(symbol)
   if (!t || !t.price || t.price <= 0) {

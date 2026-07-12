@@ -18,7 +18,7 @@ export async function GET() {
 export async function POST(req: Request) {
   const { action } = await req.json().catch(() => ({}))
   if (action === 'start') {
-    startAgentEngine(90_000)
+    startAgentEngine(60_000)
     return NextResponse.json({ ok: true, ...getEngineStatus() })
   }
   if (action === 'stop') {

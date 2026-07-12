@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { manualOpen, manualClose } from '@/lib/trading-state'
+import { manualOpen, manualClose, closeAllPositions } from '@/lib/trading-state'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -9,6 +9,10 @@ export async function POST(req: Request) {
   if (action === 'close') {
     const t = await manualClose(symbol)
     return NextResponse.json({ ok: true, trade: t })
+  }
+  if (action === 'closeAll') {
+    const result = await closeAllPositions()
+    return NextResponse.json(result)
   }
   if (action === 'open') {
     const result = await manualOpen(symbol, side, riskPct ?? 0.02)

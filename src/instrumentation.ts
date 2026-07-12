@@ -27,7 +27,7 @@ export async function register() {
 
     // 4. start the multi-agent engine after a short delay to let the market
     //    connection establish + positions restore
-    setTimeout(() => { startAgentEngine(90_000) }, 5000)
+    setTimeout(() => { startAgentEngine(60_000) }, 5000)
     console.log('[instrumentation] trading bot bootstrapped: DB restore + market connection + agent engine starting')
   }
 }

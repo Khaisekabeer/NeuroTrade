@@ -182,11 +182,11 @@ const engine = (ge.__ND_ENGINE__ ??= { started: false, cycleTimer: null as NodeJ
 export function startAgentEngine(intervalMs = 45_000) {
   if (engine.started) return
   engine.started = true
-  // exit checks every 4s (tight SL/TP monitoring) — runs INDEPENDENTLY of the
+  // exit checks every 2s (tight SL/TP monitoring) — runs INDEPENDENTLY of the
   // decision cycle so that stopping the bot (stopAgentEngine) does NOT stop
-  // SL/TP protection on already-open positions. See stopAgentEngine below.
+  // SL/TP protection on already-open positions.
   if (!engine.exitTimer) {
-    engine.exitTimer = setInterval(() => { checkExits().catch(() => {}) }, 4000)
+    engine.exitTimer = setInterval(() => { checkExits().catch(() => {}) }, 2000)
   }
   // run a cycle immediately, then on interval
   runCycle().catch(() => {})
@@ -597,8 +597,8 @@ async function runCycle() {
       // keep the engine alive even if one symbol fails
       console.error(`[agent-engine] cycle failed for ${symbol}:`, (e as Error).message)
     }
-    // stagger symbols by 3s to avoid bursting the z-ai API (prevents 429s)
-    if (i < cycleSymbols.length - 1) await new Promise((r) => setTimeout(r, 3000))
+    // stagger symbols by 1s to avoid bursting the z-ai API (prevents 429s)
+    if (i < cycleSymbols.length - 1) await new Promise((r) => setTimeout(r, 1000))
   }
 }
 
