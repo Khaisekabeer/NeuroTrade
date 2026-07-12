@@ -67,3 +67,5 @@ db/*.db-journal
 # OS
 .DS_Store
 Thumbs.db
+# tool results
+/tool-results/

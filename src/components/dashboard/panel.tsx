@@ -6,7 +6,8 @@ import { cn } from '@/lib/utils'
 
 // Shared panel wrapper used by every dashboard card. Gives consistent dark
 // styling, a subtle framer-motion fade-in, and an optional title/subtitle row.
-export interface PanelProps extends React.HTMLAttributes<HTMLDivElement> {
+// Omit 'title' from HTMLAttributes (which is string) so we can use ReactNode.
+export interface PanelProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'title'> {
   title?: React.ReactNode
   subtitle?: React.ReactNode
   icon?: React.ReactNode

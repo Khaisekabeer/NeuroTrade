@@ -157,10 +157,9 @@ export async function cancelOrder(symbol: string, orderId: string, opts?: { prod
 
 // Place a market closing order (opposite side of the entry)
 export async function placeMarketClose(symbol: string, positionSide: 'LONG' | 'SHORT', size: number): Promise<LiveOrderResult> {
-  const closeSide = positionSide === 'LONG' ? 'sell' : 'buy'
-  return placeMarketEntry(symbol, closeSide === 'LONG' ? 'LONG' : 'SHORT', size)
-  // (placeMarketEntry translates LONG→buy, SHORT→sell; for a close we pass the
-  //  opposite side, so a LONG close sends a 'sell' market order.)
+  // To close a LONG, sell. To close a SHORT, buy.
+  const closeSide: 'LONG' | 'SHORT' = positionSide === 'LONG' ? 'SHORT' : 'LONG'
+  return placeMarketEntry(symbol, closeSide, size, { tradeSide: 'close' })
 }
 
 // Fetch real live tickers from Bitget public API (no auth needed).
