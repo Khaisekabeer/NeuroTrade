@@ -11,8 +11,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, trade: t })
   }
   if (action === 'open') {
-    const t = await manualOpen(symbol, side, riskPct ?? 0.02)
-    return NextResponse.json({ ok: !!t, trade: t })
+    const result = await manualOpen(symbol, side, riskPct ?? 0.02)
+    return NextResponse.json(result)
   }
   return NextResponse.json({ ok: false, error: 'unknown action' }, { status: 400 })
 }

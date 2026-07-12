@@ -68,12 +68,12 @@ export function ManualControl() {
       })
       const data = await res.json().catch(() => ({}))
       if (action === 'open') {
-        if (data?.ok) {
+        if (data?.ok && data?.trade) {
           toast.success(`Opened ${side} ${activeSymbol}`, {
-            description: data.trade ? `size ${data.trade.size.toFixed(4)} @ ${data.trade.entryPrice.toFixed(2)}` : undefined,
+            description: `size ${data.trade.size.toFixed(4)} @ ${data.trade.entryPrice.toFixed(2)}`,
           })
         } else {
-          toast.error(`Open ${side} failed`, { description: 'Insufficient cash or no market' })
+          toast.error(`Open ${side} failed`, { description: data?.error || 'Unknown error — check API Monitor panel' })
         }
       } else {
         if (data?.ok) {
@@ -81,7 +81,7 @@ export function ManualControl() {
             description: data.trade ? `P&L ${data.trade.pnl >= 0 ? '+' : ''}$${data.trade.pnl.toFixed(2)}` : 'No open position',
           })
         } else {
-          toast.error(`Close failed`, { description: 'No open position to close' })
+          toast.error(`Close failed`, { description: data?.error || 'No open position to close' })
         }
       }
     } catch (e: any) {

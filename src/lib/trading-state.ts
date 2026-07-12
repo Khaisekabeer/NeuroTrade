@@ -590,16 +590,28 @@ export async function restoreFromDb() {
 
 // manual override (for UI controls)
 export async function manualClose(symbol: string) { return closePosition(symbol, 'manual') }
-export async function manualOpen(symbol: string, side: TradeSide, riskPct: number) {
+export async function manualOpen(symbol: string, side: TradeSide, riskPct: number): Promise<{ ok: boolean; trade?: Trade | null; error?: string }> {
   const t = state.ticks.get(symbol)
-  if (!t) return null
+  if (!t) return { ok: false, error: 'No price data for ' + symbol + ' — market service may be down. Try again in a moment.' }
   const price = side === 'LONG' ? t.ask : t.bid
+  if (!price || price <= 0) return { ok: false, error: 'Invalid price for ' + symbol }
   const riskAmt = state.portfolio.equity * riskPct
   const stopDist = price * 0.01
-  const size = riskAmt / stopDist
+  let size = riskAmt / stopDist
+  // In live mode, check against Bitget minimum order size (~$5 for spot)
+  if (state.mode === 'live' && isLiveConfigured()) {
+    const notional = size * price
+    if (notional < 5) {
+      return { ok: false, error: `Order too small: $${notional.toFixed(2)} notional. Bitget minimum is ~$5. You need at least $${(5 / price * stopDist / riskPct).toFixed(2)} equity for this trade.` }
+    }
+  }
   const sl = side === 'LONG' ? price - stopDist : price + stopDist
   const tp = side === 'LONG' ? price + stopDist * 2 : price - stopDist * 2
-  return openPosition(symbol, side, size, sl, tp, 1, 'Manual override by operator')
+  const trade = await openPosition(symbol, side, size, sl, tp, 1, 'Manual override by operator')
+  if (!trade) {
+    return { ok: false, error: state.mode === 'live' ? 'Bitget rejected the order — check API Monitor panel for details' : 'Open position failed — check equity or leverage cap' }
+  }
+  return { ok: true, trade }
 }
 
 export function resetPaperAccount() {

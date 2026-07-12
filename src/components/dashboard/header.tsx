@@ -63,16 +63,29 @@ function Pill({
 function ModeToggle() {
   const status = useDashboard((s) => s.status)
   const setStatus = useDashboard((s) => s.setStatus)
+  const risk = useDashboard((s) => s.risk)
+  const setRisk = useDashboard((s) => s.setRisk)
   const [busy, setBusy] = React.useState(false)
+  const [liveProduct, setLiveProduct] = React.useState<'spot' | 'futures'>(risk?.product ?? 'spot')
 
   const mode = status?.mode ?? 'paper'
   const liveConfigured = status?.liveConfigured ?? false
   const isLive = mode === 'live'
+  const currentProduct = risk?.product ?? 'spot'
 
-  async function switchTo(target: 'paper' | 'live') {
+  async function switchTo(target: 'paper' | 'live', product?: 'spot' | 'futures') {
     if (target === mode) return
     setBusy(true)
     try {
+      // If switching to live with a specific product, save it first
+      if (target === 'live' && product && product !== currentProduct) {
+        await fetch('/api/risk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...risk, product }),
+        })
+        setRisk({ ...risk, product } as any)
+      }
       const res = await fetch('/api/mode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -80,13 +93,12 @@ function ModeToggle() {
       })
       const data = await res.json().catch(() => ({}))
       if (data?.ok) {
-        // refresh status
         const sres = await fetch('/api/status')
         const sdata = await sres.json().catch(() => ({}))
         setStatus(sdata)
-        toast.success(target === 'live' ? 'Switched to LIVE trading' : 'Switched to PAPER trading', {
+        toast.success(target === 'live' ? `Switched to LIVE ${product || currentProduct}` : 'Switched to PAPER trading', {
           description: target === 'live'
-            ? 'Real Bitget prices + real signed orders. Trade carefully.'
+            ? `Real Bitget ${product || currentProduct} prices + real signed orders. Trade carefully.`
             : 'Simulated prices + in-memory execution. No real funds at risk.',
         })
       } else {
@@ -100,22 +112,21 @@ function ModeToggle() {
   }
 
   if (isLive) {
-    // In live mode — show a red "LIVE" pill + a quick switch-back button
     return (
       <button
         onClick={() => switchTo('paper')}
         disabled={busy}
-        title="Click to switch back to paper trading"
+        title={`Click to switch back to paper trading (currently LIVE ${currentProduct})`}
         className="flex items-center gap-1.5 rounded-md border border-rose-500/60 bg-rose-500/15 px-2 py-1 hover:bg-rose-500/25 transition-colors"
       >
         <Zap className="h-3 w-3 text-rose-400" />
         <span className="text-[10px] uppercase tracking-wider text-rose-300">LIVE</span>
+        <span className="text-[9px] text-rose-400/70 hidden sm:inline">{currentProduct}</span>
         <LiveDot color="rose" pulse />
       </button>
     )
   }
 
-  // Paper mode — show amber pill; clicking tries to go live (with confirm dialog if keys configured)
   if (!liveConfigured) {
     return (
       <div
@@ -128,7 +139,6 @@ function ModeToggle() {
     )
   }
 
-  // Paper mode but live is configured — show clickable toggle with confirm dialog
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
@@ -142,27 +152,66 @@ function ModeToggle() {
           <span className="text-[9px] text-zinc-500 hidden sm:inline">→ LIVE</span>
         </button>
       </AlertDialogTrigger>
-      <AlertDialogContent className="bg-zinc-900 border-rose-700">
+      <AlertDialogContent className="bg-zinc-900 border-rose-700 max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle className="text-rose-200 flex items-center gap-2">
             <AlertTriangle className="h-4 w-4" /> Switch to LIVE trading?
           </AlertDialogTitle>
           <AlertDialogDescription className="text-zinc-400">
-            This will:
-            <br />• Switch the price feed to <span className="text-zinc-200">real Bitget market data</span>
-            <br />• Route new orders through <span className="text-zinc-200">real signed Bitget API calls</span> (real money)
-            <br />• Place <span className="text-zinc-200">exchange-side stop-loss & take-profit orders</span> on Bitget
-            <br /><br />
-            <span className="text-rose-300 font-medium">Real funds will be at risk.</span> Start with a small amount. Make sure your API keys have correct permissions and IP whitelist. You can switch back to paper anytime.
+            Choose your market and confirm. This will route real orders to Bitget.
           </AlertDialogDescription>
         </AlertDialogHeader>
+
+        {/* Spot / Futures selector */}
+        <div className="py-2">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">Select Market</div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setLiveProduct('spot')}
+              className={cn(
+                'rounded-lg border p-3 text-left transition-colors',
+                liveProduct === 'spot'
+                  ? 'border-emerald-500/60 bg-emerald-500/10'
+                  : 'border-zinc-700 bg-zinc-800/40 hover:bg-zinc-800',
+              )}
+            >
+              <div className="text-sm font-bold text-zinc-100">Spot</div>
+              <div className="text-[10px] text-zinc-500 mt-0.5">Buy/sell actual crypto. No leverage.</div>
+            </button>
+            <button
+              onClick={() => setLiveProduct('futures')}
+              className={cn(
+                'rounded-lg border p-3 text-left transition-colors',
+                liveProduct === 'futures'
+                  ? 'border-amber-500/60 bg-amber-500/10'
+                  : 'border-zinc-700 bg-zinc-800/40 hover:bg-zinc-800',
+              )}
+            >
+              <div className="text-sm font-bold text-zinc-100">Futures</div>
+              <div className="text-[10px] text-zinc-500 mt-0.5">USDT-margined swaps. {risk?.leverage ?? 3}x {risk?.marginMode ?? 'isolated'} margin.</div>
+            </button>
+          </div>
+          {liveProduct === 'futures' && (
+            <div className="mt-2 text-[10px] text-amber-300/80 bg-amber-500/5 border border-amber-500/20 rounded p-2">
+              ⚡ Leverage: {risk?.leverage ?? 3}x ({risk?.marginMode ?? 'isolated'}). Adjust in Risk Settings panel.
+              Futures orders will set this leverage on Bitget before each trade.
+            </div>
+          )}
+        </div>
+
+        <AlertDialogDescription className="text-zinc-400 text-[11px]">
+          <span className="text-rose-300 font-medium">Real funds will be at risk.</span> Start with a small amount.
+          The bot will place exchange-side SL/TP orders to protect your position.
+          You can switch back to paper anytime.
+        </AlertDialogDescription>
+
         <AlertDialogFooter>
           <AlertDialogCancel className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700">Stay on Paper</AlertDialogCancel>
           <AlertDialogAction
-            onClick={() => switchTo('live')}
+            onClick={() => switchTo('live', liveProduct)}
             className="bg-rose-600 hover:bg-rose-700 text-white border-rose-600"
           >
-            {busy ? 'Switching…' : 'Go LIVE'}
+            {busy ? 'Switching…' : `Go LIVE (${liveProduct})`}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
