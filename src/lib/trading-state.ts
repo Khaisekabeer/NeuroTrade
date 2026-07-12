@@ -221,12 +221,49 @@ export async function setMode(mode: TradingMode) {
     if (socket) { try { socket.disconnect() } catch {} socket = null; g.__ND_SOCKET__ = null }
     state.mode = 'live'
     startLivePricePolling()
-    console.log('[trading-state] switched to LIVE mode — real Bitget prices + real orders')
+
+    // CRITICAL: sync the portfolio equity to the REAL Bitget balance.
+    // Otherwise the engine keeps using the paper $100k + 73% drawdown, which
+    // blocks all trades via the risk gate. We fetch the real spot USDT balance
+    // and reset the portfolio around it.
+    try {
+      const { fetchLiveTickers } = await import('./bitget-executor')
+      // fetch the real balance via the bitget API route (server-side)
+      const res = await fetch('http://localhost:3000/api/bitget?action=balance&product=spot')
+      const data = await res.json().catch(() => ({}))
+      if (data?.live && Array.isArray(data?.assets)) {
+        const usdt = data.assets.find((a: any) => a.coin === 'USDT')
+        const realBalance = usdt?.total ?? 0
+        if (realBalance > 0) {
+          state.portfolio.cash = realBalance
+          state.portfolio.equity = realBalance
+          state.portfolio.realizedPnl = 0
+          state.portfolio.openPnl = 0
+          state.portfolio.exposure = 0
+          state.portfolio.drawdown = 0
+          state.portfolio.dayPnl = 0
+          state.portfolio.dayPnlPct = 0
+          state.peakEquity = realBalance
+          state.dayStartEquity = realBalance
+          console.log(`[trading-state] LIVE mode: synced real Bitget balance $${realBalance.toFixed(2)} as equity`)
+        } else {
+          console.warn('[trading-state] LIVE mode: no USDT balance found in Bitget account')
+        }
+      }
+    } catch (e) {
+      console.error('[trading-state] LIVE mode: failed to sync Bitget balance:', (e as Error).message)
+    }
+
+    console.log('[trading-state] switched to LIVE mode — real Bitget prices + real orders + real balance')
   } else {
     // switching to paper: stop live polling, reconnect simulated feed
     stopLivePricePolling()
     state.mode = 'paper'
     state.connected = false
+    // restore paper equity
+    state.portfolio.cash = 100_000 + state.portfolio.realizedPnl
+    updateUnrealized()
+    state.peakEquity = Math.max(state.portfolio.equity, state.peakEquity)
     connectMarket()
     console.log('[trading-state] switched to PAPER mode — simulated prices')
   }

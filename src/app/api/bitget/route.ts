@@ -106,22 +106,33 @@ export async function GET(req: Request) {
       const data = await bitgetSigned('GET', requestPath, '')
       // Normalize the response into a simple { assets: [{coin, available, frozen, total}] } shape
       let assets: any[] = []
-      if (p === 'spot' && data?.data?.length) {
-        assets = data.data.map((a: any) => ({
-          coin: a.coin,
-          available: parseFloat(a.available || a.free || '0'),
-          frozen: parseFloat(a.frozen || a.locked || '0'),
-          total: parseFloat(a.total || a.balance || '0'),
-        }))
-      } else if (p === 'mix' && data?.data?.length) {
+      if (p === 'spot' && Array.isArray(data?.data)) {
+        // Bitget spot account/info returns: [{ coin, available, frozen, limitAvailable, borrowed, uTime }]
+        // NOTE: there is NO 'total' field — total = available + frozen
+        assets = data.data
+          .map((a: any) => {
+            const available = parseFloat(a.available || a.free || '0') || 0
+            const frozen = parseFloat(a.frozen || a.locked || a.limitAvailable || '0') || 0
+            return {
+              coin: a.coin,
+              available,
+              frozen,
+              total: available + frozen,
+            }
+          })
+          // only show assets where you actually hold something (> 0)
+          .filter((a: any) => a.total > 0)
+      } else if (p === 'mix' && Array.isArray(data?.data)) {
         for (const a of data.data) {
+          const available = parseFloat(a.available || '0') || 0
+          const frozen = parseFloat(a.frozen || '0') || 0
           assets.push({
             coin: a.marginCoin || 'USDT',
-            available: parseFloat(a.available || '0'),
-            frozen: parseFloat(a.frozen || '0'),
-            total: parseFloat(a.equity || a.available || '0'),
-            margin: parseFloat(a.margin || '0'),
-            unrealizedPL: parseFloat(a.unrealizedPL || '0'),
+            available,
+            frozen,
+            total: parseFloat(a.equity || '0') || available + frozen,
+            margin: parseFloat(a.margin || '0') || 0,
+            unrealizedPL: parseFloat(a.unrealizedPL || '0') || 0,
           })
         }
       }
