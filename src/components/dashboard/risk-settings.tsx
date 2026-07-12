@@ -19,10 +19,20 @@ export function RiskSettings() {
 
   React.useEffect(() => {
     if (!risk) return
-    const sig = JSON.stringify(risk)
+    // Ensure all fields have defaults (older DB rows may lack the new fields)
+    const normalized: RiskSettings = {
+      maxRiskPerTrade: risk.maxRiskPerTrade ?? 0.02,
+      maxTotalExposure: risk.maxTotalExposure ?? 0.6,
+      maxDrawdown: risk.maxDrawdown ?? 0.15,
+      leverageCap: risk.leverageCap ?? 5,
+      product: risk.product ?? 'spot',
+      marginMode: risk.marginMode ?? 'isolated',
+      leverage: risk.leverage ?? 3,
+    }
+    const sig = JSON.stringify(normalized)
     if (sig !== lastServerRef.current) {
       lastServerRef.current = sig
-      setDraft(risk)
+      setDraft(normalized)
     }
   }, [risk])
 
@@ -133,14 +143,14 @@ export function RiskSettings() {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <Label className="text-[10px] uppercase tracking-wider text-zinc-500">Leverage</Label>
-                <span className="text-[11px] font-mono tabular-nums text-emerald-300 font-bold">{draft.leverage}x</span>
+                <span className="text-[11px] font-mono tabular-nums text-emerald-300 font-bold">{draft.leverage ?? 3}x</span>
               </div>
               <input
                 type="range"
                 min={1}
-                max={Math.min(125, draft.leverageCap)}
+                max={Math.min(125, draft.leverageCap ?? 5)}
                 step={1}
-                value={draft.leverage}
+                value={draft.leverage ?? 3}
                 onChange={(e) => update('leverage', Number(e.target.value))}
                 className="w-full accent-emerald-500"
               />
