@@ -102,6 +102,7 @@ export async function placeStopOrder(
   size: number,
   triggerPrice: number,
   kind: 'sl' | 'tp',
+  opts?: { product?: 'spot' | 'futures' },
 ): Promise<LiveOrderResult> {
   try {
     const bgSym = toBitgetSymbol(symbol)
@@ -114,6 +115,7 @@ export async function placeStopOrder(
       triggerPrice: String(triggerPrice),
       size: String(size),
       triggerType: 'fill_price',
+      product: opts?.product || 'spot',
     })
     if (!data?.live) return { ok: false, error: data?.message || data?.error || 'plan order rejected' }
     const orderId = data?.data?.orderId || data?.data?.data?.orderId || data?.data?.result?.orderId
@@ -124,10 +126,10 @@ export async function placeStopOrder(
 }
 
 // Cancel an existing plan order (used when manually closing a position before SL/TP hit)
-export async function cancelOrder(symbol: string, orderId: string): Promise<LiveOrderResult> {
+export async function cancelOrder(symbol: string, orderId: string, opts?: { product?: 'spot' | 'futures' }): Promise<LiveOrderResult> {
   try {
     const bgSym = toBitgetSymbol(symbol)
-    const data = await postBitget({ kind: 'cancel', symbol: bgSym, orderId })
+    const data = await postBitget({ kind: 'cancel', symbol: bgSym, orderId, product: opts?.product || 'spot' })
     if (!data?.live) return { ok: false, error: data?.message || data?.error || 'cancel failed' }
     return { ok: true, orderId, data: data.data }
   } catch (e: any) {
@@ -144,14 +146,36 @@ export async function placeMarketClose(symbol: string, positionSide: 'LONG' | 'S
 }
 
 // Fetch real live tickers from Bitget public API (no auth needed).
-// Used by the live price-polling loop in trading-state when LIVE_PRICES=true.
-export async function fetchLiveTickers(symbols: string[]): Promise<Array<{ symbol: string; price: number; ts: number; volume24h: number; change24h: number }>> {
+// Supports BOTH spot and futures — pass product='futures' to hit the mix endpoint.
+export async function fetchLiveTickers(symbols: string[], product: 'spot' | 'futures' = 'spot'): Promise<Array<{ symbol: string; price: number; ts: number; volume24h: number; change24h: number }>> {
   try {
     const bgSyms = symbols.map(toBitgetSymbol).join(',')
+    // spot:  /api/v2/spot/market/tickers?symbols=BTCUSDT,ETHUSDT  (returns array)
+    // futures: /api/v2/mix/market/tickers?productType=USDT-FUTURES&symbol=BTCUSDT  (returns single object per call)
+    if (product === 'futures') {
+      // futures endpoint takes one symbol at a time, so we fetch in parallel
+      const results = await Promise.all(symbols.map(async (sym) => {
+        const bgSym = toBitgetSymbol(sym)
+        try {
+          const res = await fetch(`https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES&symbol=${bgSym}`, { cache: 'no-store' })
+          const json = await res.json()
+          const t = Array.isArray(json?.data) ? json.data[0] : json?.data
+          if (!t) return null
+          return {
+            symbol: sym,
+            price: parseFloat(t.lastPr || t.last),
+            ts: Date.now(),
+            volume24h: parseFloat(t.baseVolume24h || t.quoteVolume24h) || 0,
+            change24h: parseFloat(t.change24h) || 0,
+          }
+        } catch { return null }
+      }))
+      return results.filter((t): t is NonNullable<typeof t> => t !== null && !isNaN(t.price) && t.price > 0)
+    }
+    // spot
     const res = await fetch(`https://api.bitget.com/api/v2/spot/market/tickers?symbols=${encodeURIComponent(bgSyms)}`, { cache: 'no-store' })
     const json = await res.json()
     const arr = json?.data || []
-    // reverse-map Bitget symbol → our symbol
     const reverseMap: Record<string, string> = {}
     for (const k in SYMBOL_TO_BITGET_SPOT) reverseMap[SYMBOL_TO_BITGET_SPOT[k]] = k
     return arr.map((t: any) => ({
@@ -167,10 +191,14 @@ export async function fetchLiveTickers(symbols: string[]): Promise<Array<{ symbo
 }
 
 // Fetch real live klines from Bitget (for bootstrapping candle history)
-export async function fetchLiveKlines(symbol: string, limit = 200): Promise<Array<{ openTime: number; open: number; high: number; low: number; close: number; volume: number }>> {
+// Supports BOTH spot and futures.
+export async function fetchLiveKlines(symbol: string, limit = 200, product: 'spot' | 'futures' = 'spot'): Promise<Array<{ openTime: number; open: number; high: number; low: number; close: number; volume: number }>> {
   try {
     const bgSym = toBitgetSymbol(symbol)
-    const res = await fetch(`https://api.bitget.com/api/v2/spot/market/candles?symbol=${bgSym}&granularity=1m&limit=${limit}`, { cache: 'no-store' })
+    const path = product === 'futures'
+      ? `https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${bgSym}&granularity=1m&limit=${limit}`
+      : `https://api.bitget.com/api/v2/spot/market/candles?symbol=${bgSym}&granularity=1m&limit=${limit}`
+    const res = await fetch(path, { cache: 'no-store' })
     const json = await res.json()
     const arr = json?.data || []
     // Bitget returns [ts, open, high, low, close, volume, ...] newest-first

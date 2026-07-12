@@ -174,14 +174,21 @@ function pushNewCandle(c: Candle) {
 // microservice AND the local fallback generator.
 async function pollLivePrices() {
   const symbols = TRADE_SYMBOLS.map((s) => s.symbol)
-  const ticks = await fetchLiveTickers(symbols)
-  for (const t of ticks) {
-    applyTick(t.symbol, t.price)
-    // also update the tick's volume + change fields
-    const existing = state.ticks.get(t.symbol)
-    if (existing) {
-      existing.volume24h = t.volume24h
-      existing.change24h = t.change24h
+  const product = state.risk.product
+  const ticks = await fetchLiveTickers(symbols, product)
+  if (ticks.length === 0) {
+    // fallback: if futures tickers fail, try spot (futures symbols may not exist)
+    const spotTicks = await fetchLiveTickers(symbols, 'spot')
+    for (const t of spotTicks) {
+      applyTick(t.symbol, t.price)
+      const existing = state.ticks.get(t.symbol)
+      if (existing) { existing.volume24h = t.volume24h; existing.change24h = t.change24h }
+    }
+  } else {
+    for (const t of ticks) {
+      applyTick(t.symbol, t.price)
+      const existing = state.ticks.get(t.symbol)
+      if (existing) { existing.volume24h = t.volume24h; existing.change24h = t.change24h }
     }
   }
   state.connected = true
@@ -189,11 +196,12 @@ async function pollLivePrices() {
 
 async function startLivePricePolling() {
   if (state.livePriceTimer) return
+  const product = state.risk.product
   // bootstrap candle history from Bitget once
   if (!state.liveTickerLoaded) {
     state.liveTickerLoaded = true
     for (const s of TRADE_SYMBOLS) {
-      const klines = await fetchLiveKlines(s.symbol, 200)
+      const klines = await fetchLiveKlines(s.symbol, 200, product)
       if (klines.length) {
         const candles: Candle[] = klines.map((k) => ({
           symbol: s.symbol, timeframe: '1m',
@@ -202,13 +210,13 @@ async function startLivePricePolling() {
         state.candles.set(s.symbol, candles.slice(-MAX_CANDLES))
       }
     }
-    console.log('[trading-state] live mode: bootstrapped candle history from Bitget')
+    console.log(`[trading-state] live mode: bootstrapped ${product} candle history from Bitget`)
   }
   // initial poll
   pollLivePrices().catch(() => {})
   // then every 2s
   state.livePriceTimer = setInterval(() => { pollLivePrices().catch(() => {}) }, 2000)
-  console.log('[trading-state] live mode: polling real Bitget prices every 2s')
+  console.log(`[trading-state] live mode: polling real Bitget ${product} prices every 2s`)
 }
 
 function stopLivePricePolling() {
@@ -226,13 +234,10 @@ export async function setMode(mode: TradingMode) {
     startLivePricePolling()
 
     // CRITICAL: sync the portfolio equity to the REAL Bitget balance.
-    // Otherwise the engine keeps using the paper $100k + 73% drawdown, which
-    // blocks all trades via the risk gate. We fetch the real spot USDT balance
-    // and reset the portfolio around it.
+    // Uses the selected product (spot or futures) for the balance fetch.
     try {
-      const { fetchLiveTickers } = await import('./bitget-executor')
-      // fetch the real balance via the bitget API route (server-side)
-      const res = await fetch('http://localhost:3000/api/bitget?action=balance&product=spot')
+      const product = state.risk.product
+      const res = await fetch(`http://localhost:3000/api/bitget?action=balance&product=${product}`)
       const data = await res.json().catch(() => ({}))
       if (data?.live && Array.isArray(data?.assets)) {
         const usdt = data.assets.find((a: any) => a.coin === 'USDT')
@@ -388,11 +393,11 @@ export async function openPosition(symbol: string, side: TradeSide, size: number
     }
     liveEntryOrderId = entry.orderId
     // 2. exchange-side stop-loss (reduce-only trigger)
-    const sl = await placeStopOrder(symbol, side, size, stopLoss, 'sl')
+    const sl = await placeStopOrder(symbol, side, size, stopLoss, 'sl', { product })
     if (sl.ok) liveSlOrderId = sl.orderId
     else console.warn('[live] SL plan order failed:', sl.error)
     // 3. exchange-side take-profit (reduce-only trigger)
-    const tp = await placeStopOrder(symbol, side, size, takeProfit, 'tp')
+    const tp = await placeStopOrder(symbol, side, size, takeProfit, 'tp', { product })
     if (tp.ok) liveTpOrderId = tp.orderId
     else console.warn('[live] TP plan order failed:', tp.error)
     console.log(`[live] opened ${side} ${symbol} size=${size} entry=${liveEntryOrderId} sl=${liveSlOrderId} tp=${liveTpOrderId}`)
@@ -430,9 +435,10 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
 
   // ---- LIVE MODE: cancel exchange-side SL/TP orders, then place closing market order ----
   if (state.mode === 'live' && isLiveConfigured()) {
+    const product = state.risk.product
     // cancel the SL + TP plan orders so they don't trigger after we've closed
-    if (pos.liveSlOrderId) { await cancelOrder(symbol, pos.liveSlOrderId) }
-    if (pos.liveTpOrderId) { await cancelOrder(symbol, pos.liveTpOrderId) }
+    if (pos.liveSlOrderId) { await cancelOrder(symbol, pos.liveSlOrderId, { product }) }
+    if (pos.liveTpOrderId) { await cancelOrder(symbol, pos.liveTpOrderId, { product }) }
     // place a market close order (opposite side, tradeSide='close' for futures)
     const closeSide = pos.side === 'LONG' ? 'SHORT' : 'LONG'
     await placeMarketEntry(symbol, closeSide, pos.size, {
@@ -592,24 +598,27 @@ export async function restoreFromDb() {
 export async function manualClose(symbol: string) { return closePosition(symbol, 'manual') }
 export async function manualOpen(symbol: string, side: TradeSide, riskPct: number): Promise<{ ok: boolean; trade?: Trade | null; error?: string }> {
   const t = state.ticks.get(symbol)
-  if (!t) return { ok: false, error: 'No price data for ' + symbol + ' — market service may be down. Try again in a moment.' }
+  if (!t || !t.price || t.price <= 0) {
+    return { ok: false, error: `No price data for ${symbol}. ${state.mode === 'live' ? 'Live price polling may not have started yet — wait 2-3 seconds and try again.' : 'Market service may be down — wait 3s for fallback to start.'}` }
+  }
   const price = side === 'LONG' ? t.ask : t.bid
   if (!price || price <= 0) return { ok: false, error: 'Invalid price for ' + symbol }
   const riskAmt = state.portfolio.equity * riskPct
   const stopDist = price * 0.01
   let size = riskAmt / stopDist
-  // In live mode, check against Bitget minimum order size (~$5 for spot)
+  // In live mode, check against Bitget minimum order size (~$5 for spot, ~$1 for futures)
   if (state.mode === 'live' && isLiveConfigured()) {
+    const minNotional = state.risk.product === 'futures' ? 1 : 5
     const notional = size * price
-    if (notional < 5) {
-      return { ok: false, error: `Order too small: $${notional.toFixed(2)} notional. Bitget minimum is ~$5. You need at least $${(5 / price * stopDist / riskPct).toFixed(2)} equity for this trade.` }
+    if (notional < minNotional) {
+      return { ok: false, error: `Order too small: $${notional.toFixed(2)} notional (min $${minNotional} for ${state.risk.product}). ${state.risk.product === 'spot' ? 'Deposit more USDT or' : 'Increase leverage or'} try a higher-risk trade.` }
     }
   }
   const sl = side === 'LONG' ? price - stopDist : price + stopDist
   const tp = side === 'LONG' ? price + stopDist * 2 : price - stopDist * 2
   const trade = await openPosition(symbol, side, size, sl, tp, 1, 'Manual override by operator')
   if (!trade) {
-    return { ok: false, error: state.mode === 'live' ? 'Bitget rejected the order — check API Monitor panel for details' : 'Open position failed — check equity or leverage cap' }
+    return { ok: false, error: state.mode === 'live' ? 'Bitget rejected the order — check API Monitor panel for details' : 'Open position failed — check equity, exposure, or drawdown limit' }
   }
   return { ok: true, trade }
 }
