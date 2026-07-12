@@ -18,6 +18,7 @@ import { ManualControl } from '@/components/dashboard/manual-control'
 import { BitgetPanel } from '@/components/dashboard/bitget-panel'
 import { TradingViewCard } from '@/components/dashboard/trading-view-card'
 import { RiskSettings } from '@/components/dashboard/risk-settings'
+import { ApiMonitor } from '@/components/dashboard/api-monitor'
 import { Footer } from '@/components/dashboard/footer'
 
 export default function Home() {
@@ -66,6 +67,7 @@ export default function Home() {
           <BitgetPanel />
           <TradingViewCard />
           <RiskSettings />
+          <ApiMonitor />
         </div>
       </main>
 

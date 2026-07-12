@@ -7,6 +7,7 @@ import { Panel } from './panel'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 import type { RiskSettings } from '@/lib/types'
 
 export function RiskSettings() {
@@ -16,8 +17,6 @@ export function RiskSettings() {
   const [saving, setSaving] = React.useState(false)
   const lastServerRef = React.useRef<string>('')
 
-  // Sync the local draft from the server only when the server snapshot
-  // actually changes (so we don't clobber the operator's in-progress edits).
   React.useEffect(() => {
     if (!risk) return
     const sig = JSON.stringify(risk)
@@ -35,7 +34,7 @@ export function RiskSettings() {
     )
   }
 
-  function update<K extends keyof RiskSettings>(k: K, v: number) {
+  function update<K extends keyof RiskSettings>(k: K, v: number | string) {
     setDraft({ ...(draft as RiskSettings), [k]: v })
   }
 
@@ -52,7 +51,7 @@ export function RiskSettings() {
       if (data?.maxRiskPerTrade !== undefined) {
         setRisk(data as RiskSettings)
         toast.success('Risk settings saved', {
-          description: `max risk ${(data.maxRiskPerTrade * 100).toFixed(1)}% · max DD ${(data.maxDrawdown * 100).toFixed(0)}% · lev ${data.leverageCap}x`,
+          description: `${data.product} · lev ${data.leverage}x (${data.marginMode}) · max DD ${(data.maxDrawdown * 100).toFixed(0)}%`,
         })
       } else {
         toast.error('Save failed')
@@ -68,13 +67,13 @@ export function RiskSettings() {
     { key: 'maxRiskPerTrade', label: 'Max Risk / Trade', step: 0.005, min: 0.005, max: 0.1, suffix: '', pct: true },
     { key: 'maxTotalExposure', label: 'Max Total Exposure', step: 0.05, min: 0.1, max: 1, suffix: '', pct: true },
     { key: 'maxDrawdown', label: 'Max Drawdown', step: 0.01, min: 0.02, max: 0.5, suffix: '', pct: true },
-    { key: 'leverageCap', label: 'Leverage Cap', step: 1, min: 1, max: 20, suffix: 'x', pct: false },
+    { key: 'leverageCap', label: 'Leverage Cap', step: 1, min: 1, max: 125, suffix: 'x', pct: false },
   ]
 
   return (
     <Panel
       title="Risk Settings"
-      subtitle="operator limits"
+      subtitle="operator limits + leverage"
       icon={<Sliders className="h-4 w-4" />}
       actions={
         <button
@@ -87,9 +86,76 @@ export function RiskSettings() {
         </button>
       }
     >
+      {/* Product + margin mode + leverage row */}
+      <div className="space-y-2 mb-3">
+        <div>
+          <Label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Market</Label>
+          <div className="flex gap-1 rounded-md border border-zinc-800 bg-zinc-950/60 p-1">
+            {(['spot', 'futures'] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => update('product', p)}
+                className={cn(
+                  'flex-1 rounded px-2 py-1 text-[11px] font-semibold capitalize transition-colors',
+                  draft.product === p
+                    ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/40'
+                    : 'text-zinc-400 hover:text-zinc-200 border border-transparent',
+                )}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {draft.product === 'futures' && (
+          <>
+            <div>
+              <Label className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 block">Margin Mode</Label>
+              <div className="flex gap-1 rounded-md border border-zinc-800 bg-zinc-950/60 p-1">
+                {(['isolated', 'cross'] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => update('marginMode', m)}
+                    className={cn(
+                      'flex-1 rounded px-2 py-1 text-[11px] font-semibold capitalize transition-colors',
+                      draft.marginMode === m
+                        ? 'bg-amber-500/15 text-amber-300 border border-amber-500/40'
+                        : 'text-zinc-400 hover:text-zinc-200 border border-transparent',
+                    )}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <Label className="text-[10px] uppercase tracking-wider text-zinc-500">Leverage</Label>
+                <span className="text-[11px] font-mono tabular-nums text-emerald-300 font-bold">{draft.leverage}x</span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={Math.min(125, draft.leverageCap)}
+                step={1}
+                value={draft.leverage}
+                onChange={(e) => update('leverage', Number(e.target.value))}
+                className="w-full accent-emerald-500"
+              />
+              <div className="flex justify-between text-[9px] text-zinc-600 mt-0.5">
+                <span>1x</span>
+                <span>{Math.min(125, draft.leverageCap)}x (cap)</span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 gap-3">
         {fields.map((f) => {
-          const val = draft[f.key]
+          const val = draft[f.key] as number
           return (
             <div key={f.key} className="space-y-1">
               <Label className="text-[10px] uppercase tracking-wider text-zinc-500">{f.label}</Label>
@@ -112,7 +178,10 @@ export function RiskSettings() {
         })}
       </div>
       <p className="text-[10px] text-zinc-500 mt-3 leading-relaxed">
-        Changes are persisted to the database and respected by the RISK agent on the next cycle.
+        {draft.product === 'futures'
+          ? `Futures: ${draft.leverage}x ${draft.marginMode} margin. Leverage is set on Bitget before each order.`
+          : 'Spot: no leverage. Buy/sell the actual asset.'}
+        {' '}Changes apply on the next agent cycle.
       </p>
     </Panel>
   )

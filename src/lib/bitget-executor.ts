@@ -39,16 +39,55 @@ async function postBitget(body: any): Promise<any> {
 }
 
 // Place a market entry order. side = 'buy' for LONG, 'sell' for SHORT.
-// Returns the Bitget orderId so we can track it.
-export async function placeMarketEntry(symbol: string, side: 'LONG' | 'SHORT', size: number): Promise<LiveOrderResult> {
+// For futures, pass product='futures' and set leverage/marginMode before.
+export async function placeMarketEntry(
+  symbol: string,
+  side: 'LONG' | 'SHORT',
+  size: number,
+  opts?: { product?: 'spot' | 'futures'; tradeSide?: 'open' | 'close' },
+): Promise<LiveOrderResult> {
   try {
     const bgSym = toBitgetSymbol(symbol)
     const bitgetSide = side === 'LONG' ? 'buy' : 'sell'
-    const data = await postBitget({ kind: 'market', symbol: bgSym, side: bitgetSide, orderType: 'market', size: String(size) })
+    const data = await postBitget({
+      kind: 'market',
+      symbol: bgSym,
+      side: bitgetSide,
+      orderType: 'market',
+      size: String(size),
+      product: opts?.product || 'spot',
+      tradeSide: opts?.tradeSide || (bitgetSide === 'buy' ? 'open' : 'close'),
+    })
     if (!data?.live) return { ok: false, error: data?.message || data?.error || 'order rejected' }
-    // Bitget returns orderId in data.data.orderId
     const orderId = data?.data?.orderId || data?.data?.data?.orderId || data?.data?.result?.orderId
     return { ok: true, orderId, data: data.data }
+  } catch (e: any) {
+    return { ok: false, error: e?.message }
+  }
+}
+
+// Set leverage for a futures symbol (1-125x). MUST be called before the first
+// futures order on each symbol.
+export async function setLeverage(symbol: string, leverage: number, marginMode: 'isolated' | 'cross' = 'isolated'): Promise<LiveOrderResult> {
+  try {
+    const bgSym = toBitgetSymbol(symbol)
+    const res = await fetch(`/api/bitget?action=set-leverage&product=futures&symbol=${bgSym}&leverage=${leverage}&marginMode=${marginMode}`, { cache: 'no-store' })
+    const data = await res.json().catch(() => ({}))
+    if (!data?.live) return { ok: false, error: data?.message || data?.error || 'set-leverage failed' }
+    return { ok: true, data: data.data }
+  } catch (e: any) {
+    return { ok: false, error: e?.message }
+  }
+}
+
+// Set margin mode (isolated/crossed) for a futures symbol.
+export async function setMarginMode(symbol: string, marginMode: 'isolated' | 'cross'): Promise<LiveOrderResult> {
+  try {
+    const bgSym = toBitgetSymbol(symbol)
+    const res = await fetch(`/api/bitget?action=set-margin-mode&product=futures&symbol=${bgSym}&marginMode=${marginMode}`, { cache: 'no-store' })
+    const data = await res.json().catch(() => ({}))
+    if (!data?.live) return { ok: false, error: data?.message || data?.error || 'set-margin-mode failed' }
+    return { ok: true, data: data.data }
   } catch (e: any) {
     return { ok: false, error: e?.message }
   }

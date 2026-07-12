@@ -99,6 +99,9 @@ export interface RiskSettings {
   maxTotalExposure: number
   maxDrawdown: number
   leverageCap: number
+  product: 'spot' | 'futures'   // which Bitget market to trade
+  marginMode: 'isolated' | 'cross'  // futures margin mode
+  leverage: number              // actual leverage to use (1-125x, futures)
 }
 
 export interface SymbolMeta {

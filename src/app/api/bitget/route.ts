@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { logApiCall } from '../debug/route'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -7,6 +8,8 @@ export const runtime = 'nodejs'
 // swaps). The productType is selectable per request via ?product=spot|futures
 // (default: spot). Public market data is fetched LIVE; authenticated actions
 // (balance, place order) require API keys in env vars.
+// EVERY call is logged to /api/debug so the dashboard's API Monitor panel
+// can show exactly what was sent + received.
 
 const BITGET_HOST = 'https://api.bitget.com'
 
@@ -22,11 +25,18 @@ async function sign(timestamp: string, method: string, requestPath: string, body
 }
 
 async function bitgetPublic(path: string) {
+  const t0 = Date.now()
   const res = await fetch(`${BITGET_HOST}${path}`, { headers: { 'Content-Type': 'application/json' }, cache: 'no-store' })
-  return res.json()
+  const data = await res.json()
+  logApiCall({
+    method: 'GET', endpoint: path, product: path.includes('/mix/') ? 'futures' : 'spot',
+    kind: 'public', request: null, response: data, ok: res.ok, durationMs: Date.now() - t0,
+  })
+  return data
 }
 
 async function bitgetSigned(method: string, requestPath: string, body: string) {
+  const t0 = Date.now()
   const ts = Date.now().toString()
   const signStr = await sign(ts, method, requestPath, body)
   const headers = {
@@ -38,7 +48,15 @@ async function bitgetSigned(method: string, requestPath: string, body: string) {
     'locale': 'en-US',
   }
   const res = await fetch(`${BITGET_HOST}${requestPath}`, { method, headers, body: body || undefined, cache: 'no-store' })
-  return res.json()
+  const data = await res.json()
+  logApiCall({
+    method, endpoint: requestPath,
+    product: requestPath.includes('/mix/') ? 'futures' : 'spot',
+    kind: 'signed',
+    request: body ? JSON.parse(body) : null,
+    response: data, ok: res.ok, durationMs: Date.now() - t0,
+  })
+  return data
 }
 
 // Normalize the product param. Bitget v2 uses:
@@ -145,6 +163,36 @@ export async function GET(req: Request) {
       }
       const data = await bitgetSigned('GET', `/api/v2/mix/position/current-position?productType=${pt}`, '')
       return NextResponse.json({ live: true, configured: true, product, data })
+    }
+    if (action === 'set-leverage') {
+      // futures only — set leverage for a symbol
+      if (!keysConfigured()) {
+        return NextResponse.json({ live: false, configured: false, message: 'API keys not set' }, { status: 400 })
+      }
+      const symbol = searchParams.get('symbol') || 'BTCUSDT'
+      const leverage = searchParams.get('leverage') || '10'
+      const marginMode = searchParams.get('marginMode') || 'isolated'
+      const requestPath = `/api/v2/mix/account/set-leverage?productType=${pt}`
+      const payload = JSON.stringify({
+        symbol,
+        marginMode,
+        leverage: String(leverage),
+        productType: pt,
+      })
+      const data = await bitgetSigned('POST', requestPath, payload)
+      return NextResponse.json({ live: true, configured: true, product, action: 'set-leverage', data })
+    }
+    if (action === 'set-margin-mode') {
+      // futures only — set margin mode (isolated/cross)
+      if (!keysConfigured()) {
+        return NextResponse.json({ live: false, configured: false, message: 'API keys not set' }, { status: 400 })
+      }
+      const symbol = searchParams.get('symbol') || 'BTCUSDT'
+      const marginMode = searchParams.get('marginMode') === 'cross' ? 'crossed' : 'isolated'
+      const requestPath = `/api/v2/mix/account/set-margin-mode?productType=${pt}`
+      const payload = JSON.stringify({ symbol, marginMode, productType: pt })
+      const data = await bitgetSigned('POST', requestPath, payload)
+      return NextResponse.json({ live: true, configured: true, product, action: 'set-margin-mode', data })
     }
     return NextResponse.json({ error: 'unknown action' }, { status: 400 })
   } catch (e: any) {

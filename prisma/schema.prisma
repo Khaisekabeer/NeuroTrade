@@ -88,6 +88,9 @@ model RiskSettings {
   maxTotalExposure Float  @default(0.6)    // 60% of equity
   maxDrawdown     Float   @default(0.15)   // 15%
   leverageCap     Float   @default(5)
+  product         String  @default("spot")     // spot | futures
+  marginMode      String  @default("isolated") // isolated | cross (futures)
+  leverage        Float   @default(3)          // 1-125x (futures)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }

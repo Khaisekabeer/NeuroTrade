@@ -14,7 +14,16 @@ export async function POST(req: Request) {
   setRisk(body)
   await db.riskSettings.upsert({
     where: { id: 'default' },
-    create: { id: 'default', maxRiskPerTrade: body.maxRiskPerTrade ?? 0.02, maxTotalExposure: body.maxTotalExposure ?? 0.6, maxDrawdown: body.maxDrawdown ?? 0.15, leverageCap: body.leverageCap ?? 5 },
+    create: {
+      id: 'default',
+      maxRiskPerTrade: body.maxRiskPerTrade ?? 0.02,
+      maxTotalExposure: body.maxTotalExposure ?? 0.6,
+      maxDrawdown: body.maxDrawdown ?? 0.15,
+      leverageCap: body.leverageCap ?? 5,
+      product: body.product ?? 'spot',
+      marginMode: body.marginMode ?? 'isolated',
+      leverage: body.leverage ?? 3,
+    },
     update: body,
   }).catch(() => {})
   return NextResponse.json(getRisk())

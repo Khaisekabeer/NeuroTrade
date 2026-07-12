@@ -105,6 +105,9 @@ const state: State = (g.__ND_STATE__ ??= {
     maxTotalExposure: 0.6,
     maxDrawdown: 0.15,
     leverageCap: 5,
+    product: 'spot',
+    marginMode: 'isolated',
+    leverage: 3,
   },
   startedAt: Date.now(),
   dayStartEquity: 100_000,
@@ -362,8 +365,23 @@ export async function openPosition(symbol: string, side: TradeSide, size: number
   let liveSlOrderId: string | undefined
   let liveTpOrderId: string | undefined
   if (state.mode === 'live' && isLiveConfigured()) {
-    // 1. market entry order
-    const entry = await placeMarketEntry(symbol, side, size)
+    const product = state.risk.product
+    // For futures: set leverage + margin mode BEFORE placing the order.
+    // Bitget requires this once per symbol; calling it repeatedly is safe.
+    if (product === 'futures') {
+      const lev = Math.min(state.risk.leverage, state.risk.leverageCap)
+      const { setLeverage, setMarginMode } = await import('./bitget-executor')
+      const levRes = await setLeverage(symbol, lev, state.risk.marginMode)
+      if (!levRes.ok) console.warn('[live] set-leverage failed (continuing):', levRes.error)
+      const mmRes = await setMarginMode(symbol, state.risk.marginMode)
+      if (!mmRes.ok) console.warn('[live] set-margin-mode failed (continuing):', mmRes.error)
+      console.log(`[live] futures ${symbol}: leverage=${lev}x margin=${state.risk.marginMode}`)
+    }
+    // 1. market entry order (with product + tradeSide for futures)
+    const entry = await placeMarketEntry(symbol, side, size, {
+      product,
+      tradeSide: 'open',
+    })
     if (!entry.ok) {
       console.error('[live] entry order failed:', entry.error)
       return null
@@ -415,9 +433,12 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
     // cancel the SL + TP plan orders so they don't trigger after we've closed
     if (pos.liveSlOrderId) { await cancelOrder(symbol, pos.liveSlOrderId) }
     if (pos.liveTpOrderId) { await cancelOrder(symbol, pos.liveTpOrderId) }
-    // place a market close order (opposite side)
+    // place a market close order (opposite side, tradeSide='close' for futures)
     const closeSide = pos.side === 'LONG' ? 'SHORT' : 'LONG'
-    await placeMarketEntry(symbol, closeSide, pos.size)
+    await placeMarketEntry(symbol, closeSide, pos.size, {
+      product: state.risk.product,
+      tradeSide: 'close',
+    })
     console.log(`[live] closed ${pos.side} ${symbol} reason=${reason}`)
   }
 
@@ -553,6 +574,9 @@ export async function restoreFromDb() {
         maxTotalExposure: riskRow.maxTotalExposure,
         maxDrawdown: riskRow.maxDrawdown,
         leverageCap: riskRow.leverageCap,
+        product: (riskRow as any).product === 'futures' ? 'futures' : 'spot',
+        marginMode: (riskRow as any).marginMode === 'cross' ? 'cross' : 'isolated',
+        leverage: (riskRow as any).leverage ?? 3,
       }
     }
     updateUnrealized()
