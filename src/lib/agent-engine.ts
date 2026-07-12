@@ -477,8 +477,17 @@ async function executeDecision(symbol: string, decision: { signal: Signal; confi
 
 // ---------------- CYCLE ----------------
 async function runCycle() {
-  for (let i = 0; i < TRADE_SYMBOLS.length; i++) {
-    const symbol = TRADE_SYMBOLS[i].symbol
+  // Snapshot the symbol list at the START of the cycle. If a symbol is
+  // removed via Manage Tickers mid-cycle, the current cycle finishes with
+  // the snapshot (safe), and the next cycle uses the updated list.
+  const cycleSymbols = TRADE_SYMBOLS.map((s) => s.symbol)
+  for (let i = 0; i < cycleSymbols.length; i++) {
+    const symbol = cycleSymbols[i]
+    // Skip if the symbol was removed DURING this cycle
+    if (!TRADE_SYMBOLS.find((s) => s.symbol === symbol)) {
+      console.log(`[cycle] skipping ${symbol} — removed during this cycle`)
+      continue
+    }
     try {
       const candles = getCandles(symbol, 100)
       if (candles.length < 10) continue
@@ -582,7 +591,7 @@ async function runCycle() {
       console.error(`[agent-engine] cycle failed for ${symbol}:`, (e as Error).message)
     }
     // stagger symbols by 3s to avoid bursting the z-ai API (prevents 429s)
-    if (i < TRADE_SYMBOLS.length - 1) await new Promise((r) => setTimeout(r, 3000))
+    if (i < cycleSymbols.length - 1) await new Promise((r) => setTimeout(r, 3000))
   }
 }
 
