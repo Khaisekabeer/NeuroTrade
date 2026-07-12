@@ -606,14 +606,10 @@ export async function manualOpen(symbol: string, side: TradeSide, riskPct: numbe
   const riskAmt = state.portfolio.equity * riskPct
   const stopDist = price * 0.01
   let size = riskAmt / stopDist
-  // In live mode, check against Bitget minimum order size (~$5 for spot, ~$1 for futures)
-  if (state.mode === 'live' && isLiveConfigured()) {
-    const minNotional = state.risk.product === 'futures' ? 1 : 5
-    const notional = size * price
-    if (notional < minNotional) {
-      return { ok: false, error: `Order too small: $${notional.toFixed(2)} notional (min $${minNotional} for ${state.risk.product}). ${state.risk.product === 'spot' ? 'Deposit more USDT or' : 'Increase leverage or'} try a higher-risk trade.` }
-    }
-  }
+  // NOTE: We do NOT block small orders here. Bitget has its own minimums
+  // (spot: varies by symbol, futures: 1 contract). If the order is too small,
+  // Bitget will reject it and the error will show in the API Monitor panel.
+  // This allows trading with any capital — even $2 with high leverage.
   const sl = side === 'LONG' ? price - stopDist : price + stopDist
   const tp = side === 'LONG' ? price + stopDist * 2 : price - stopDist * 2
   const trade = await openPosition(symbol, side, size, sl, tp, 1, 'Manual override by operator')
