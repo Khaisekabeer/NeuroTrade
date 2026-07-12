@@ -487,7 +487,7 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
   const closed = state.trades.filter((tr) => tr.status === 'CLOSED')
   const wins = closed.filter((tr) => (tr.pnl ?? 0) > 0).length
   state.portfolio.winRate = closed.length ? wins / closed.length : 0
-  return trade
+  return trade ?? null
 }
 
 // check stops/takes on each tick — returns closed trades
