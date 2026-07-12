@@ -44,12 +44,12 @@ async function postBitget(body: any): Promise<any> {
 }
 
 // Place a market entry order. side = 'buy' for LONG, 'sell' for SHORT.
-// For futures, pass product='futures' and set leverage/marginMode before.
+// For futures, pass product='futures' + marginMode.
 export async function placeMarketEntry(
   symbol: string,
   side: 'LONG' | 'SHORT',
   size: number,
-  opts?: { product?: 'spot' | 'futures'; tradeSide?: 'open' | 'close' },
+  opts?: { product?: 'spot' | 'futures'; tradeSide?: 'open' | 'close'; marginMode?: 'isolated' | 'cross' },
 ): Promise<LiveOrderResult> {
   try {
     const bgSym = toBitgetSymbol(symbol)
@@ -62,6 +62,7 @@ export async function placeMarketEntry(
       size: String(size),
       product: opts?.product || 'spot',
       tradeSide: opts?.tradeSide || (bitgetSide === 'buy' ? 'open' : 'close'),
+      marginMode: opts?.marginMode || 'isolated',
     })
     if (!data?.live) return { ok: false, error: data?.message || data?.error || 'order rejected (no live response)' }
     // Bitget success: { code: "00000", msg: "success", data: { orderId } }
@@ -118,7 +119,7 @@ export async function placeStopOrder(
   size: number,
   triggerPrice: number,
   kind: 'sl' | 'tp',
-  opts?: { product?: 'spot' | 'futures' },
+  opts?: { product?: 'spot' | 'futures'; marginMode?: 'isolated' | 'cross' },
 ): Promise<LiveOrderResult> {
   try {
     const bgSym = toBitgetSymbol(symbol)
@@ -132,6 +133,7 @@ export async function placeStopOrder(
       size: String(size),
       triggerType: 'fill_price',
       product: opts?.product || 'spot',
+      marginMode: opts?.marginMode || 'isolated',
     })
     if (!data?.live) return { ok: false, error: data?.message || data?.error || 'plan order rejected' }
     const orderId = data?.data?.orderId || data?.data?.data?.orderId || data?.data?.result?.orderId

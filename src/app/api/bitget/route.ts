@@ -171,11 +171,13 @@ export async function GET(req: Request) {
       }
       const symbol = searchParams.get('symbol') || 'BTCUSDT'
       const leverage = searchParams.get('leverage') || '10'
-      const marginMode = searchParams.get('marginMode') || 'isolated'
+      // Bitget expects 'isolated' or 'crossed' (NOT 'cross')
+      const rawMarginMode = searchParams.get('marginMode') || 'isolated'
+      const marginMode = rawMarginMode === 'cross' ? 'crossed' : rawMarginMode
       const requestPath = `/api/v2/mix/account/set-leverage?productType=${pt}`
       const payload = JSON.stringify({
         symbol,
-        marginMode,
+        marginMode,  // 'isolated' or 'crossed'
         leverage: String(leverage),
         productType: pt,
       })
@@ -232,6 +234,9 @@ export async function POST(req: Request) {
       const requestPath = p === 'spot'
         ? '/api/v2/spot/trade/place-plan-order'
         : `/api/v2/mix/order/place-plan-order?productType=${pt}`
+      // Bitget futures requires marginMode ('isolated' or 'crossed')
+      const rawMm = body.marginMode || 'isolated'
+      const futuresMarginMode = rawMm === 'cross' ? 'crossed' : rawMm
       const payload = p === 'spot'
         ? JSON.stringify({
             symbol: body.symbol, side: body.side,
@@ -250,6 +255,8 @@ export async function POST(req: Request) {
             size: String(body.size),
             triggerType: body.triggerType || 'fill_price',
             productType: pt,
+            marginMode: futuresMarginMode,
+            reduceOnly: true,  // SL/TP are always reduce-only
             force: 'gtc',
           })
       const data = await bitgetSigned('POST', requestPath, payload)
@@ -260,6 +267,9 @@ export async function POST(req: Request) {
     const requestPath = p === 'spot'
       ? '/api/v2/spot/trade/place-order'
       : `/api/v2/mix/order/place-order?productType=${pt}`
+    // Bitget futures requires marginMode ('isolated' or 'crossed')
+    const rawMm = body.marginMode || 'isolated'
+    const futuresMarginMode = rawMm === 'cross' ? 'crossed' : rawMm
     const payload = p === 'spot'
       ? JSON.stringify({
           symbol: body.symbol, side: body.side,
@@ -274,7 +284,9 @@ export async function POST(req: Request) {
           size: String(body.size),
           ...(body.price ? { price: String(body.price) } : {}),
           productType: pt,
+          marginMode: futuresMarginMode,
           tradeSide: body.tradeSide || (body.side === 'buy' ? 'open' : 'close'),
+          reduceOnly: body.tradeSide === 'close',  // closing orders are reduce-only
           force: body.force || 'gtc',
         })
     const data = await bitgetSigned('POST', requestPath, payload)

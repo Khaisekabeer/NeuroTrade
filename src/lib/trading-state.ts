@@ -384,10 +384,11 @@ export async function openPosition(symbol: string, side: TradeSide, size: number
       if (!mmRes.ok) console.warn('[live] set-margin-mode failed (continuing):', mmRes.error)
       console.log(`[live] futures ${symbol}: leverage=${lev}x margin=${state.risk.marginMode}`)
     }
-    // 1. market entry order (with product + tradeSide for futures)
+    // 1. market entry order (with product + tradeSide + marginMode for futures)
     const entry = await placeMarketEntry(symbol, side, size, {
       product,
       tradeSide: 'open',
+      marginMode: state.risk.marginMode,
     })
     if (!entry.ok) {
       console.error('[live] entry order failed:', entry.error)
@@ -396,11 +397,11 @@ export async function openPosition(symbol: string, side: TradeSide, size: number
     }
     liveEntryOrderId = entry.orderId
     // 2. exchange-side stop-loss (reduce-only trigger)
-    const sl = await placeStopOrder(symbol, side, size, stopLoss, 'sl', { product })
+    const sl = await placeStopOrder(symbol, side, size, stopLoss, 'sl', { product, marginMode: state.risk.marginMode })
     if (sl.ok) liveSlOrderId = sl.orderId
     else console.warn('[live] SL plan order failed:', sl.error)
     // 3. exchange-side take-profit (reduce-only trigger)
-    const tp = await placeStopOrder(symbol, side, size, takeProfit, 'tp', { product })
+    const tp = await placeStopOrder(symbol, side, size, takeProfit, 'tp', { product, marginMode: state.risk.marginMode })
     if (tp.ok) liveTpOrderId = tp.orderId
     else console.warn('[live] TP plan order failed:', tp.error)
     console.log(`[live] opened ${side} ${symbol} size=${size} entry=${liveEntryOrderId} sl=${liveSlOrderId} tp=${liveTpOrderId}`)
@@ -447,6 +448,7 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
     await placeMarketEntry(symbol, closeSide, pos.size, {
       product: state.risk.product,
       tradeSide: 'close',
+      marginMode: state.risk.marginMode,
     })
     console.log(`[live] closed ${pos.side} ${symbol} reason=${reason}`)
   }
