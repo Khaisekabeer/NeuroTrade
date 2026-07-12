@@ -437,23 +437,26 @@ async function executeDecision(symbol: string, decision: { signal: Signal; confi
   let size = riskAmt / stopDist
   if (size <= 0) return
 
-  // EXPOSURE CAP: ensure this new position's notional + existing notional
-  // does not exceed equity * maxTotalExposure. This prevents the bot from
-  // opening huge positions (e.g. 2 million DOGE) that push exposure to 400%+.
+  // EXPOSURE CAP: cap each position at (equity × maxTotalExposure / number of symbols)
+  // so one position doesn't consume the entire exposure budget. This ensures
+  // multiple tickers (BTC, ETH, SOL, XRP, DOGE, ADA) can all hold positions.
+  const numSymbols = TRADE_SYMBOLS.length
+  const perSymbolBudget = port.equity * risk.maxTotalExposure / numSymbols
   const existingNotional = port.positions.reduce((s, p) => {
     const px = getCandles(p.symbol, 2)[getCandles(p.symbol, 2).length - 1]?.close ?? p.entryPrice
     return s + p.size * px
   }, 0)
-  const maxNotional = port.equity * risk.maxTotalExposure
-  const availableNotional = maxNotional - existingNotional
-  if (availableNotional <= 0) {
+  const totalBudget = port.equity * risk.maxTotalExposure
+  const availableTotal = totalBudget - existingNotional
+  if (availableTotal <= 0) {
     console.log(`[execute] ${symbol}: exposure cap reached (${(port.exposure * 100).toFixed(1)}%/${(risk.maxTotalExposure * 100).toFixed(0)}%) — skipping`)
     return
   }
+  // cap notional at min(perSymbolBudget, availableTotal) so we leave room for others
+  const maxNotional = Math.min(perSymbolBudget, availableTotal)
   const newNotional = size * price
-  if (newNotional > availableNotional) {
-    size = availableNotional / price
-    console.log(`[execute] ${symbol}: resized from ${riskAmt / stopDist} to ${size} to fit exposure cap`)
+  if (newNotional > maxNotional) {
+    size = maxNotional / price
   }
   if (size <= 0) return
 
