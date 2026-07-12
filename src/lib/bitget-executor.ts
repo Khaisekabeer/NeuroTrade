@@ -187,6 +187,11 @@ export async function loadContractSpecs(): Promise<void> {
   }
 }
 
+// Internal: get the cached spec for a symbol (used by pre-flight checks)
+export function _getSpec(bgSym: string): { sizeMultiplier: number; minTradeNum: number } | undefined {
+  return contractSpecsCache.get(bgSym)
+}
+
 // Round a size to the symbol's contract multiplier + enforce minimum.
 // e.g. for SOL (multiplier 0.1, min 0.1): size=0.57 → 0.5, size=0.05 → 0.1 (min)
 export function roundToContractSize(symbol: string, size: number): number {

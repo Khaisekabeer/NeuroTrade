@@ -387,7 +387,18 @@ export async function openPosition(symbol: string, side: TradeSide, size: number
   }
   // For futures: round to the symbol's contract size multiplier (e.g. SOL=0.1, BTC=0.0001)
   if (state.risk.product === 'futures') {
+    await loadContractSpecs()
     size = roundToContractSize(symbol, size)
+    // Pre-flight check: if the rounded size is still below Bitget's minimum,
+    // return an error instead of sending a doomed order to Bitget.
+    const bgSym = symbol.replace('/', '')
+    const spec = (await import('./bitget-executor'))._getSpec(bgSym)
+    if (spec && size < spec.minTradeNum) {
+      const msg = `Order size ${size} ${symbol.split('/')[0]} is below Bitget minimum (${spec.minTradeNum}). Need more capital or higher leverage. Equity=$${equity.toFixed(2)} lev=${leverage}x → buying power=$${(equity * leverage).toFixed(2)} → max size=${((equity * leverage) / price).toFixed(4)} ${symbol.split('/')[0]} (min ${spec.minTradeNum}).`
+      console.error('[openPosition]', msg)
+      state.lastLiveError = msg
+      return null
+    }
   }
 
   // ---- LIVE MODE: place real orders on Bitget ----
