@@ -35,6 +35,7 @@ interface State {
   connected: boolean
   mode: TradingMode
   livePriceTimer: NodeJS.Timeout | null
+  liveBalanceTimer: NodeJS.Timeout | null
   liveTickerLoaded: boolean
   lastLiveError: string | null
 }
@@ -117,6 +118,7 @@ const state: State = (g.__ND_STATE__ ??= {
   connected: false,
   mode: 'paper',
   livePriceTimer: null,
+  liveBalanceTimer: null,
   liveTickerLoaded: false,
   lastLiveError: null,
 })
@@ -236,11 +238,40 @@ async function startLivePricePolling() {
   pollLivePrices().catch(() => {})
   // then every 2s
   state.livePriceTimer = setInterval(() => { pollLivePrices().catch(() => {}) }, 2000)
-  console.log(`[trading-state] live mode: polling real Bitget ${product} prices every 2s`)
+  // re-sync the real Bitget balance every 30s so equity stays accurate
+  // (picks up realized P/L from manual trades on Bitget, deposits, withdrawals)
+  state.liveBalanceTimer = setInterval(() => { syncLiveBalance().catch(() => {}) }, 30_000)
+  console.log(`[trading-state] live mode: polling real Bitget ${product} prices every 2s + balance every 30s`)
+}
+
+// Re-fetch the real Bitget USDT balance and update equity.
+// This keeps the dashboard equity in sync with reality — picks up realized
+// P/L from positions closed on Bitget directly, deposits, withdrawals, etc.
+async function syncLiveBalance() {
+  if (!isLiveConfigured()) return
+  try {
+    const product = state.risk.product
+    const res = await fetch(`http://localhost:3000/api/bitget?action=balance&product=${product}`)
+    const data = await res.json().catch(() => ({}))
+    if (data?.live && Array.isArray(data?.assets)) {
+      const usdt = data.assets.find((a: any) => a.coin === 'USDT')
+      const realBalance = usdt?.total ?? 0
+      if (realBalance > 0) {
+        // Preserve unrealized P/L from open positions, but sync cash to real balance
+        const openPnl = state.portfolio.openPnl
+        state.portfolio.cash = realBalance
+        state.portfolio.equity = realBalance + openPnl
+        if (state.portfolio.equity > state.peakEquity) state.peakEquity = state.portfolio.equity
+      }
+    }
+  } catch {
+    // ignore — will retry in 30s
+  }
 }
 
 function stopLivePricePolling() {
   if (state.livePriceTimer) { clearInterval(state.livePriceTimer); state.livePriceTimer = null }
+  if (state.liveBalanceTimer) { clearInterval(state.liveBalanceTimer); state.liveBalanceTimer = null }
 }
 
 // ---- MODE SWITCH (paper <-> live) ----
