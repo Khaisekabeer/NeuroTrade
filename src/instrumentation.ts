@@ -4,7 +4,6 @@
 // multi-agent engine.
 
 export async function register() {
-  // only run on the server (Node runtime), not during edge build
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     const { connectMarket, restoreFromDb } = await import('./lib/trading-state')
     const { startAgentEngine } = await import('./lib/agent-engine')
@@ -17,17 +16,14 @@ export async function register() {
       update: {},
     }).catch(() => {})
 
-    // 2. restore open positions + cash + realized P/L from the database
-    //    (CRITICAL: without this, a restart would wipe your open trades)
-    restoreFromDb().catch(() => {})
+    // 2. restore symbols + positions from DB — MUST finish before engine starts
+    await restoreFromDb().catch((e: any) => console.error('[instrumentation] restoreFromDb failed:', e?.message))
 
-    // 3. connect to the market-data microservice (or fall back to local
-    //    tick generation if it's unreachable)
+    // 3. connect to the market-data microservice
     connectMarket()
 
-    // 4. start the multi-agent engine after a short delay to let the market
-    //    connection establish + positions restore
-    setTimeout(() => { startAgentEngine(60_000) }, 5000)
-    console.log('[instrumentation] trading bot bootstrapped: DB restore + market connection + agent engine starting')
+    // 4. start the multi-agent engine AFTER symbols are loaded
+    startAgentEngine(60_000)
+    console.log('[instrumentation] trading bot bootstrapped: DB restored + market connected + agent engine started')
   }
 }

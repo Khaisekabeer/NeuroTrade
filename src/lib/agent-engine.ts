@@ -179,18 +179,19 @@ const SENTIMENT_TTL = 5 * 60 * 1000 // 5 min
 
 const engine = (ge.__ND_ENGINE__ ??= { started: false, cycleTimer: null as NodeJS.Timeout | null, exitTimer: null as NodeJS.Timeout | null })
 
-export function startAgentEngine(intervalMs = 45_000) {
+export function startAgentEngine(intervalMs = 60_000) {
   if (engine.started) return
   engine.started = true
-  // exit checks every 2s (tight SL/TP monitoring) — runs INDEPENDENTLY of the
-  // decision cycle so that stopping the bot (stopAgentEngine) does NOT stop
-  // SL/TP protection on already-open positions.
+  // exit checks every 2s
   if (!engine.exitTimer) {
-    engine.exitTimer = setInterval(() => { checkExits().catch(() => {}) }, 2000)
+    engine.exitTimer = setInterval(() => { checkExits().catch((e) => console.error('[checkExits]', e)) }, 2000)
   }
-  // run a cycle immediately, then on interval
-  runCycle().catch(() => {})
-  engine.cycleTimer = setInterval(() => { runCycle().catch(() => {}) }, intervalMs)
+  // run a cycle immediately, then on interval — LOG errors instead of swallowing
+  runCycle().catch((e) => console.error('[runCycle] FATAL:', e?.message || e))
+  engine.cycleTimer = setInterval(() => {
+    runCycle().catch((e) => console.error('[runCycle] FATAL:', e?.message || e))
+  }, intervalMs)
+  console.log(`[agent-engine] started — cycle every ${intervalMs / 1000}s, ${TRADE_SYMBOLS.length} symbols: ${TRADE_SYMBOLS.map(s => s.symbol).join(', ') || '(none)'}`)
 }
 
 export function stopAgentEngine() {
