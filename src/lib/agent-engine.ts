@@ -441,7 +441,12 @@ async function executeDecision(symbol: string, decision: { signal: Signal; confi
   const risk = getRisk()
   const leverage = risk.product === 'futures' ? Math.min(risk.leverage, risk.leverageCap) : 1
   const riskAmt = port.equity * risk.maxRiskPerTrade * decision.confidence
-  const stopDist = Math.max(atr * 1.5, price * 0.008)
+  // Stop distance: use ATR but cap it to a reasonable percentage of price
+  // (ATR can be wildly wrong on simulated data, producing SL values like -9000)
+  const atrStopDist = atr * 1.5
+  const pctStopDist = price * 0.015  // 1.5% of price (minimum)
+  const maxStopDist = price * 0.05   // 5% of price (maximum)
+  const stopDist = Math.min(Math.max(atrStopDist, pctStopDist), maxStopDist)
   // Size = risk amount / stop distance, THEN multiply by leverage for futures.
   // This gives leveraged buying power: $2 equity × 20x = $40 notional.
   let size = (riskAmt / stopDist) * leverage

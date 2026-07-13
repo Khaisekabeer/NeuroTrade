@@ -853,7 +853,7 @@ export async function manualOpen(symbol: string, side: TradeSide, riskPct: numbe
   if (!price || price <= 0) return { ok: false, error: 'Invalid price for ' + symbol }
   const leverage = state.risk.product === 'futures' ? Math.min(state.risk.leverage, state.risk.leverageCap) : 1
   const riskAmt = state.portfolio.equity * riskPct
-  const stopDist = price * 0.01
+  const stopDist = price * 0.015  // 1.5% stop distance (consistent with agent engine)
   let size = (riskAmt / stopDist) * leverage
   // For futures: round to the symbol's contract size multiplier
   if (state.risk.product === 'futures') {
