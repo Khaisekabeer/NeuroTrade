@@ -243,8 +243,8 @@ async function startLivePricePolling() {
   state.liveBalanceTimer = setInterval(() => {
     syncLiveBalance().catch(() => {})
     syncLivePositions().catch(() => {})
-  }, 30_000)
-  console.log(`[trading-state] live mode: polling prices every 2s + balance/positions every 30s`)
+  }, 10_000)  // 10s sync — was 30s, too slow for position reconciliation
+  console.log(`[trading-state] live mode: polling prices every 2s + balance/positions every 10s`)
 }
 
 // Sync positions with Bitget — fetch real open positions + reconcile.
@@ -260,18 +260,34 @@ async function syncLivePositions() {
     const data = await res.json().catch(() => ({}))
     if (!data?.live || !data?.data?.data) return
     const bitgetPositions = data.data.data || []
-    const bitgetSymbols = new Set(bitgetPositions.map((p: any) => {
-      // Bitget returns symbol like "ETHUSDT" — convert to "ETH/USDT"
-      const sym = p.symbol || p.s
-      return sym.replace('USDT', '/USDT')
-    }))
+    const bitgetSymbols = new Set<string>()
 
-    // Check in-memory positions against Bitget
+    // Import orphan positions (exist on Bitget but not in memory)
+    for (const p of bitgetPositions) {
+      const sym = (p.symbol || p.s || '').replace('USDT', '/USDT')
+      if (!sym) continue
+      bitgetSymbols.add(sym)
+      if (!state.positions.has(sym)) {
+        // Orphan position on Bitget — import it so the bot tracks it
+        const total = parseFloat(p.total || p.size || p.pos || '0')
+        const size = Math.abs(total)
+        const side: TradeSide = total >= 0 ? 'LONG' : 'SHORT'
+        const entryPrice = parseFloat(p.averageOpen || p.openPriceAvg || p.entryPrice || '0')
+        const liquidationPrice = parseFloat(p.liquidationPrice || '0')
+        const sl = liquidationPrice > 0 ? liquidationPrice : entryPrice * 0.95
+        const tp = entryPrice * 1.10
+        console.log(`[syncPositions] importing orphan position ${sym} ${side} size=${size} entry=${entryPrice}`)
+        state.positions.set(sym, {
+          symbol: sym, side, size, entryPrice,
+          stopLoss: sl, takeProfit: tp, unrealized: 0, openedAt: Date.now(),
+        })
+      }
+    }
+
+    // Remove stale positions (in memory but NOT on Bitget → already closed)
     for (const [symbol, pos] of state.positions.entries()) {
       if (!bitgetSymbols.has(symbol)) {
-        // Position exists in memory but NOT on Bitget → already closed
         console.log(`[syncPositions] ${symbol} closed on Bitget but still in memory — syncing`)
-        // Calculate P/L at current price and close in memory
         const t = state.ticks.get(symbol)
         const price = t?.price ?? pos.entryPrice
         const pnl = pos.side === 'LONG'
@@ -292,7 +308,7 @@ async function syncLivePositions() {
       }
     }
   } catch {
-    // ignore — will retry in 30s
+    // ignore — will retry in 10s
   }
 }
 // This keeps the dashboard equity in sync with reality — picks up realized
@@ -659,23 +675,7 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
   return trade ?? null
 }
 
-// check stops/takes on each tick — returns closed trades
-// In live mode, the EXCHANGE-side plan orders handle SL/TP directly, so this
-// function is mostly a paper-mode safety net + a sync mechanism. It still runs
-// so the dashboard reflects closures promptly when a soft SL/TP would trigger.
-export async function checkExits(): Promise<string[]> {
-  const closed: string[] = []
-  for (const pos of state.positions.values()) {
-    const t = state.ticks.get(pos.symbol)
-    if (!t) continue
-    const price = t.price
-    const hitSL = pos.side === 'LONG' ? price <= pos.stopLoss : price >= pos.stopLoss
-    const hitTP = pos.side === 'LONG' ? price >= pos.takeProfit : price <= pos.takeProfit
-    if (hitSL) { await closePosition(pos.symbol, 'stop-loss'); closed.push(pos.symbol) }
-    else if (hitTP) { await closePosition(pos.symbol, 'take-profit'); closed.push(pos.symbol) }
-  }
-  return closed
-}
+// (checkExits is now defined below closeAllPositions with removed-ticker safety)
 
 export function recordDecision(d: OrchestratorDecision) {
   state.decisions.unshift(d)
@@ -836,6 +836,25 @@ export async function closeAllPositions(): Promise<{ ok: boolean; closed: number
     }
   }
   return { ok: true, closed, errors }
+}
+
+// checkExits — skip positions for removed tickers (they'll be synced via
+// syncLivePositions instead)
+export async function checkExits(): Promise<string[]> {
+  const closed: string[] = []
+  for (const pos of state.positions.values()) {
+    // Skip if the symbol was removed from the active list — position sync
+    // will handle closing it on Bitget + cleaning up memory
+    if (!TRADE_SYMBOLS.find((s) => s.symbol === pos.symbol)) continue
+    const t = state.ticks.get(pos.symbol)
+    if (!t) continue
+    const price = t.price
+    const hitSL = pos.side === 'LONG' ? price <= pos.stopLoss : price >= pos.stopLoss
+    const hitTP = pos.side === 'LONG' ? price >= pos.takeProfit : price <= pos.takeProfit
+    if (hitSL) { await closePosition(pos.symbol, 'stop-loss'); closed.push(pos.symbol) }
+    else if (hitTP) { await closePosition(pos.symbol, 'take-profit'); closed.push(pos.symbol) }
+  }
+  return closed
 }
 export async function manualOpen(symbol: string, side: TradeSide, riskPct: number): Promise<{ ok: boolean; trade?: Trade | null; error?: string }> {
   const t = state.ticks.get(symbol)
