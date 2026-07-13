@@ -28,18 +28,11 @@ interface Sym {
 const SYMS: Map<string, Sym> = new Map()
 const CANDLE_MS = 60_000
 
-// Default seed prices for common coins (used when adding a symbol that
-// hasn't been seen before). For unknown coins, price = 1.0.
-const SEED_PRICES: Record<string, number> = {
-  'BTC': 67000, 'ETH': 3500, 'SOL': 170, 'XRP': 0.62, 'DOGE': 0.14,
-  'ADA': 0.45, 'AVAX': 35, 'LINK': 14, 'MATIC': 0.8, 'DOT': 7,
-  'LTC': 80, 'TRX': 0.12, 'ATOM': 9, 'NEAR': 5, 'APT': 8,
-  'ARB': 1.0, 'OP': 2.0, 'INJ': 25, 'SUI': 1.2, 'BNB': 600,
-}
-
+// NO hardcoded seed prices. The price is ALWAYS passed from the backend
+// (which fetches it from Bitget). If no price is provided, default to 1.0.
 function createSym(symbol: string, price?: number): Sym {
   const base = symbol.split('/')[0]
-  const p = price || SEED_PRICES[base] || 1.0
+  const p = price || 1.0
   return {
     symbol,
     base,

@@ -161,7 +161,7 @@ export async function GET(req: Request) {
       if (!keysConfigured()) {
         return NextResponse.json({ live: false, configured: false, message: 'API keys not set' }, { status: 400 })
       }
-      const data = await bitgetSigned('GET', `/api/v2/mix/position/current-position?productType=${pt}`, '')
+      const data = await bitgetSigned('GET', `/api/v2/mix/position/all-position?productType=${pt}`, '')
       return NextResponse.json({ live: true, configured: true, product, data })
     }
     if (action === 'set-leverage') {
