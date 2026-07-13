@@ -740,14 +740,24 @@ export async function restoreFromDb() {
     // TRADE_SYMBOLS starts empty (no hardcoded defaults). If the DB has
     // saved symbols, they're loaded here. If empty → no tickers → no trades.
     const dbSymbols = await db.tradingSymbol.findMany({ orderBy: { createdAt: 'asc' } })
-    for (const s of dbSymbols) {
-      TRADE_SYMBOLS.push({
-        symbol: s.symbol, name: s.name, base: s.base,
-        price: s.price, change24h: 0, volume24h: 0,
-      })
-      seedNewSymbol(s.symbol, s.price || 1)
+    if (dbSymbols.length === 0) {
+      // DB is empty — seed XRP as the default ticker so the bot trades
+      // immediately without requiring the user to add tickers manually
+      const defaultSymbol = { symbol: 'XRP/USDT', name: 'XRP', base: 'XRP', price: 0.62 }
+      await db.tradingSymbol.create({ data: defaultSymbol }).catch(() => {})
+      TRADE_SYMBOLS.push({ ...defaultSymbol, change24h: 0, volume24h: 0 })
+      seedNewSymbol(defaultSymbol.symbol, defaultSymbol.price)
+      console.log(`[restoreFromDb] DB empty — seeded default: XRP/USDT`)
+    } else {
+      for (const s of dbSymbols) {
+        TRADE_SYMBOLS.push({
+          symbol: s.symbol, name: s.name, base: s.base,
+          price: s.price, change24h: 0, volume24h: 0,
+        })
+        seedNewSymbol(s.symbol, s.price || 1)
+      }
     }
-    console.log(`[restoreFromDb] loaded ${TRADE_SYMBOLS.length} symbols from DB: ${TRADE_SYMBOLS.map(s => s.symbol).join(', ') || '(none — add via Manage Tickers)'}`)
+    console.log(`[restoreFromDb] loaded ${TRADE_SYMBOLS.length} symbols: ${TRADE_SYMBOLS.map(s => s.symbol).join(', ')}`)
 
     // 1. reload open positions into memory — but only for symbols still in
     //    the active trading list. Positions for removed symbols are skipped

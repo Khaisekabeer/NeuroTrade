@@ -2,12 +2,7 @@ import { NextResponse } from 'next/server'
 import { TRADE_SYMBOLS, addSymbol, removeSymbol } from '@/lib/types'
 import { fetchLiveTickers } from '@/lib/bitget-executor'
 import { seedNewSymbol, manualClose, notifySymbolRemoved } from '@/lib/trading-state'
-
-// Lazy import db to avoid module initialization timing issues in dev mode
-async function getDb() {
-  const { db } = await import('@/lib/db')
-  return db
-}
+import { db } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -38,7 +33,6 @@ export async function POST(req: Request) {
     }
     removeSymbol(symbol)
     notifySymbolRemoved(symbol)
-    const db = await getDb()
     await db.tradingSymbol.deleteMany({ where: { symbol } }).catch(() => {})
     return NextResponse.json({ ok: true, symbols: TRADE_SYMBOLS, message: `Removed ${symbol}` })
   }
@@ -62,7 +56,6 @@ export async function POST(req: Request) {
       }
       addSymbol({ symbol, name: base, base, price, change24h: 0, volume24h: 0 })
       seedNewSymbol(symbol, price)
-      const db = await getDb()
       await db.tradingSymbol.upsert({
         where: { symbol },
         create: { symbol, name: base, base, price },
