@@ -236,15 +236,14 @@ async function startLivePricePolling() {
   }
   // initial poll
   pollLivePrices().catch(() => {})
-  // then every 2s
-  state.livePriceTimer = setInterval(() => { pollLivePrices().catch(() => {}) }, 2000)
-  // re-sync the real Bitget balance every 30s so equity stays accurate
-  // (picks up realized P/L from manual trades on Bitget, deposits, withdrawals)
+  // then every 5s (was 2s — too fast, caused UI glitching)
+  state.livePriceTimer = setInterval(() => { pollLivePrices().catch(() => {}) }, 5000)
+  // re-sync balance + positions every 15s (was 10s — reduced API load)
   state.liveBalanceTimer = setInterval(() => {
     syncLiveBalance().catch(() => {})
     syncLivePositions().catch(() => {})
-  }, 10_000)  // 10s sync — was 30s, too slow for position reconciliation
-  console.log(`[trading-state] live mode: polling prices every 2s + balance/positions every 10s`)
+  }, 15_000)
+  console.log(`[trading-state] live mode: polling prices every 5s + balance/positions every 15s`)
 }
 
 // Sync positions with Bitget — fetch real open positions + reconcile.
@@ -664,8 +663,8 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
       // Check if the error is "No position to close" (22002) — this means
       // the position was ALREADY closed on Bitget (e.g. SL/TP triggered).
       // In this case, delete from memory + record P/L (treat as closed).
-      const errStr = (closeResult.error || '').toLowerCase()
-      if (errStr.includes('22002') || errStr.includes('no position to close')) {
+      const errStr = JSON.stringify(closeResult).toLowerCase() + ' ' + (closeResult.error || '').toLowerCase()
+      if (errStr.includes('22002') || errStr.includes('no position') || errStr.includes('no position to close')) {
         console.log(`[live] ${symbol} already closed on Bitget (22002) — syncing state`)
         // Fall through to the P/L calculation + memory cleanup below
       } else {
