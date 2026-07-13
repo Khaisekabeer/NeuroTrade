@@ -742,28 +742,30 @@ export function bumpCycle() { state.cycle++; return state.cycle }
 export async function restoreFromDb() {
   try {
     // 0. Load persisted trading symbols from DB.
-    // The DB is the SINGLE SOURCE OF TRUTH. On EVERY call (including HMR
-    // reloads), we CLEAR TRADE_SYMBOLS and reload from DB to avoid duplicates
-    // and ensure the DB state is reflected exactly.
-    TRADE_SYMBOLS.length = 0  // clear any existing symbols (prevents duplicates on HMR)
-    const dbSymbols = await db.tradingSymbol.findMany({ orderBy: { createdAt: 'asc' } })
-    if (dbSymbols.length === 0) {
-      // DB is empty — seed XRP as the default ticker
-      const defaultSymbol = { symbol: 'XRP/USDT', name: 'XRP', base: 'XRP', price: 0.62 }
-      await db.tradingSymbol.create({ data: defaultSymbol }).catch(() => {})
-      TRADE_SYMBOLS.push({ ...defaultSymbol, change24h: 0, volume24h: 0 })
-      seedNewSymbol(defaultSymbol.symbol, defaultSymbol.price)
-      console.log(`[restoreFromDb] DB empty — seeded default: XRP/USDT`)
+    // TRADE_SYMBOLS is on globalThis (survives HMR), so we only reload
+    // from DB if it's empty (first boot) — not on every HMR reload.
+    if (TRADE_SYMBOLS.length > 0) {
+      console.log(`[restoreFromDb] TRADE_SYMBOLS already has ${TRADE_SYMBOLS.length} symbols (HMR reload — skipping DB reload)`)
     } else {
-      for (const s of dbSymbols) {
-        TRADE_SYMBOLS.push({
-          symbol: s.symbol, name: s.name, base: s.base,
-          price: s.price, change24h: 0, volume24h: 0,
-        })
-        seedNewSymbol(s.symbol, s.price || 1)
+      const dbSymbols = await db.tradingSymbol.findMany({ orderBy: { createdAt: 'asc' } })
+      if (dbSymbols.length === 0) {
+        // DB is empty — seed XRP as the default ticker
+        const defaultSymbol = { symbol: 'XRP/USDT', name: 'XRP', base: 'XRP', price: 0.62 }
+        await db.tradingSymbol.create({ data: defaultSymbol }).catch(() => {})
+        TRADE_SYMBOLS.push({ ...defaultSymbol, change24h: 0, volume24h: 0 })
+        seedNewSymbol(defaultSymbol.symbol, defaultSymbol.price)
+        console.log(`[restoreFromDb] DB empty — seeded default: XRP/USDT`)
+      } else {
+        for (const s of dbSymbols) {
+          TRADE_SYMBOLS.push({
+            symbol: s.symbol, name: s.name, base: s.base,
+            price: s.price, change24h: 0, volume24h: 0,
+          })
+          seedNewSymbol(s.symbol, s.price || 1)
+        }
       }
+      console.log(`[restoreFromDb] loaded ${TRADE_SYMBOLS.length} symbols: ${TRADE_SYMBOLS.map(s => s.symbol).join(', ')}`)
     }
-    console.log(`[restoreFromDb] loaded ${TRADE_SYMBOLS.length} symbols: ${TRADE_SYMBOLS.map(s => s.symbol).join(', ')}`)
 
     // 1. reload open positions into memory — clear first to avoid stale data on HMR
     state.positions.clear()

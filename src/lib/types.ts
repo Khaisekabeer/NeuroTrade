@@ -113,10 +113,11 @@ export interface SymbolMeta {
   volume24h: number
 }
 
-// Mutable runtime list of trading symbols. Starts EMPTY — symbols are
-// added via the Manage Tickers panel and persisted to the TradingSymbol
-// DB table. On startup, restoreFromDb() loads them from the DB.
-export const TRADE_SYMBOLS: SymbolMeta[] = []
+// Mutable runtime list of trading symbols. Hoisted to globalThis so HMR
+// doesn't create a new empty array on each reload — the same array
+// survives across module re-evaluations.
+const _g = globalThis as unknown as { __ND_TRADE_SYMBOLS__?: SymbolMeta[] }
+export const TRADE_SYMBOLS: SymbolMeta[] = (_g.__ND_TRADE_SYMBOLS__ ??= [])
 
 // Helper: add a new symbol to the list (if not already present)
 export function addSymbol(sym: SymbolMeta) {
