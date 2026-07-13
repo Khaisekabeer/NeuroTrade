@@ -743,13 +743,13 @@ export function bumpCycle() { state.cycle++; return state.cycle }
 export async function restoreFromDb() {
   try {
     // 0. Load persisted trading symbols from DB.
-    // The DB is the SINGLE SOURCE OF TRUTH for which tickers to trade.
-    // TRADE_SYMBOLS starts empty (no hardcoded defaults). If the DB has
-    // saved symbols, they're loaded here. If empty → no tickers → no trades.
+    // The DB is the SINGLE SOURCE OF TRUTH. On EVERY call (including HMR
+    // reloads), we CLEAR TRADE_SYMBOLS and reload from DB to avoid duplicates
+    // and ensure the DB state is reflected exactly.
+    TRADE_SYMBOLS.length = 0  // clear any existing symbols (prevents duplicates on HMR)
     const dbSymbols = await db.tradingSymbol.findMany({ orderBy: { createdAt: 'asc' } })
     if (dbSymbols.length === 0) {
-      // DB is empty — seed XRP as the default ticker so the bot trades
-      // immediately without requiring the user to add tickers manually
+      // DB is empty — seed XRP as the default ticker
       const defaultSymbol = { symbol: 'XRP/USDT', name: 'XRP', base: 'XRP', price: 0.62 }
       await db.tradingSymbol.create({ data: defaultSymbol }).catch(() => {})
       TRADE_SYMBOLS.push({ ...defaultSymbol, change24h: 0, volume24h: 0 })
@@ -766,9 +766,8 @@ export async function restoreFromDb() {
     }
     console.log(`[restoreFromDb] loaded ${TRADE_SYMBOLS.length} symbols: ${TRADE_SYMBOLS.map(s => s.symbol).join(', ')}`)
 
-    // 1. reload open positions into memory — but only for symbols still in
-    //    the active trading list. Positions for removed symbols are skipped
-    //    (they should have been closed when the symbol was removed).
+    // 1. reload open positions into memory — clear first to avoid stale data on HMR
+    state.positions.clear()
     const dbPositions = await db.position.findMany()
     for (const p of dbPositions) {
       // Skip positions for symbols that are no longer in the active list
