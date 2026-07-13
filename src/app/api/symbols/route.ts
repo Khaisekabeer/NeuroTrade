@@ -22,11 +22,19 @@ export async function POST(req: Request) {
 
   if (action === 'remove') {
     // Close any open position for this symbol BEFORE removing it.
-    try { await manualClose(symbol) } catch { /* may not have a position */ }
+    // Use try/catch so removal succeeds even if the position close fails
+    // (e.g. no position, or Bitget API error) — the symbol should still be
+    // removed from the trading list.
+    try {
+      await manualClose(symbol)
+    } catch (e: any) {
+      console.warn(`[symbols] close position failed for ${symbol}:`, e?.message)
+      // Continue with removal anyway
+    }
     removeSymbol(symbol)
     // Persist to DB — delete the row so it doesn't come back on restart
     await db.tradingSymbol.deleteMany({ where: { symbol } }).catch(() => {})
-    return NextResponse.json({ ok: true, symbols: TRADE_SYMBOLS, message: `Removed ${symbol} (position closed if open)` })
+    return NextResponse.json({ ok: true, symbols: TRADE_SYMBOLS, message: `Removed ${symbol}` })
   }
 
   if (action === 'add') {
