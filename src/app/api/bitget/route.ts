@@ -257,8 +257,9 @@ export async function POST(req: Request) {
             triggerType: body.triggerType || 'fill_price',
             productType: pt,
             marginMode: futuresMarginMode,
-            marginCoin: body.marginCoin || 'USDT',  // required for USDT-margined futures
-            reduceOnly: true,  // SL/TP are always reduce-only
+            marginCoin: body.marginCoin || 'USDT',
+            // NOTE: do NOT send reduceOnly — Bitget futures rejects it (40017).
+            // The plan order with tradeSide implied by side is sufficient.
             force: 'gtc',
           })
       const data = await bitgetSigned('POST', requestPath, payload)
