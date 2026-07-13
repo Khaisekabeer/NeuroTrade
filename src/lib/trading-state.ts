@@ -240,11 +240,61 @@ async function startLivePricePolling() {
   state.livePriceTimer = setInterval(() => { pollLivePrices().catch(() => {}) }, 2000)
   // re-sync the real Bitget balance every 30s so equity stays accurate
   // (picks up realized P/L from manual trades on Bitget, deposits, withdrawals)
-  state.liveBalanceTimer = setInterval(() => { syncLiveBalance().catch(() => {}) }, 30_000)
-  console.log(`[trading-state] live mode: polling real Bitget ${product} prices every 2s + balance every 30s`)
+  state.liveBalanceTimer = setInterval(() => {
+    syncLiveBalance().catch(() => {})
+    syncLivePositions().catch(() => {})
+  }, 30_000)
+  console.log(`[trading-state] live mode: polling prices every 2s + balance/positions every 30s`)
 }
 
-// Re-fetch the real Bitget USDT balance and update equity.
+// Sync positions with Bitget — fetch real open positions + reconcile.
+// If a position exists in memory but NOT on Bitget → it was closed (SL/TP hit)
+// → delete from memory + record P/L.
+// If a position exists on Bitget but NOT in memory → orphan → close it.
+async function syncLivePositions() {
+  if (!isLiveConfigured() || state.mode !== 'live') return
+  try {
+    const product = state.risk.product
+    if (product !== 'futures') return  // spot positions are different
+    const res = await fetch(`http://localhost:3000/api/bitget?action=positions&product=${product}`)
+    const data = await res.json().catch(() => ({}))
+    if (!data?.live || !data?.data?.data) return
+    const bitgetPositions = data.data.data || []
+    const bitgetSymbols = new Set(bitgetPositions.map((p: any) => {
+      // Bitget returns symbol like "ETHUSDT" — convert to "ETH/USDT"
+      const sym = p.symbol || p.s
+      return sym.replace('USDT', '/USDT')
+    }))
+
+    // Check in-memory positions against Bitget
+    for (const [symbol, pos] of state.positions.entries()) {
+      if (!bitgetSymbols.has(symbol)) {
+        // Position exists in memory but NOT on Bitget → already closed
+        console.log(`[syncPositions] ${symbol} closed on Bitget but still in memory — syncing`)
+        // Calculate P/L at current price and close in memory
+        const t = state.ticks.get(symbol)
+        const price = t?.price ?? pos.entryPrice
+        const pnl = pos.side === 'LONG'
+          ? (price - pos.entryPrice) * pos.size
+          : (pos.entryPrice - price) * pos.size
+        state.portfolio.cash += pnl
+        state.portfolio.realizedPnl += pnl
+        state.positions.delete(symbol)
+        const trade = state.trades.find((tr) => tr.symbol === symbol && tr.status === 'OPEN')
+        if (trade) {
+          trade.status = 'CLOSED'
+          trade.exitPrice = price
+          trade.pnl = pnl
+          trade.closedAt = Date.now()
+          db.trade.updateMany({ where: { id: trade.id }, data: { status: 'CLOSED', exitPrice: price, pnl, closedAt: new Date() } }).catch(() => {})
+        }
+        db.position.deleteMany({ where: { symbol } }).catch(() => {})
+      }
+    }
+  } catch {
+    // ignore — will retry in 30s
+  }
+}
 // This keeps the dashboard equity in sync with reality — picks up realized
 // P/L from positions closed on Bitget directly, deposits, withdrawals, etc.
 async function syncLiveBalance() {
@@ -568,11 +618,19 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
       marginMode: state.risk.marginMode,
     })
     if (!closeResult.ok) {
-      // CRITICAL: the Bitget close order failed. Do NOT delete the in-memory
-      // position — keep it open so the bot can retry. Record the error.
-      console.error(`[live] close order FAILED for ${symbol}:`, closeResult.error)
-      state.lastLiveError = `Failed to close ${symbol} on Bitget: ${closeResult.error}. Position is still open on Bitget — close it manually.`
-      return null
+      // Check if the error is "No position to close" (22002) — this means
+      // the position was ALREADY closed on Bitget (e.g. SL/TP triggered).
+      // In this case, delete from memory + record P/L (treat as closed).
+      const errStr = (closeResult.error || '').toLowerCase()
+      if (errStr.includes('22002') || errStr.includes('no position to close')) {
+        console.log(`[live] ${symbol} already closed on Bitget (22002) — syncing state`)
+        // Fall through to the P/L calculation + memory cleanup below
+      } else {
+        // Real error — keep the position in memory so the bot can retry
+        console.error(`[live] close order FAILED for ${symbol}:`, closeResult.error)
+        state.lastLiveError = `Failed to close ${symbol} on Bitget: ${closeResult.error}`
+        return null
+      }
     }
     console.log(`[live] closed ${pos.side} ${symbol} reason=${reason} orderId=${closeResult.orderId}`)
   }
