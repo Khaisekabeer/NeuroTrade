@@ -269,14 +269,16 @@ async function syncLivePositions() {
       bitgetSymbols.add(sym)
       if (!state.positions.has(sym)) {
         // Orphan position on Bitget — import it so the bot tracks it
+        // Use holdSide from Bitget (more reliable than sign of total)
+        const holdSide = (p.holdSide || '').toLowerCase()
+        const side: TradeSide = holdSide === 'short' ? 'SHORT' : holdSide === 'long' ? 'LONG' : (parseFloat(p.total || '0') >= 0 ? 'LONG' : 'SHORT')
         const total = parseFloat(p.total || p.size || p.pos || '0')
         const size = Math.abs(total)
-        const side: TradeSide = total >= 0 ? 'LONG' : 'SHORT'
-        const entryPrice = parseFloat(p.averageOpen || p.openPriceAvg || p.entryPrice || '0')
+        const entryPrice = parseFloat(p.openPriceAvg || p.averageOpen || p.entryPrice || '0')
         const liquidationPrice = parseFloat(p.liquidationPrice || '0')
         const sl = liquidationPrice > 0 ? liquidationPrice : entryPrice * 0.95
         const tp = entryPrice * 1.10
-        console.log(`[syncPositions] importing orphan position ${sym} ${side} size=${size} entry=${entryPrice}`)
+        console.log(`[syncPositions] importing orphan position ${sym} ${side} size=${size} entry=${entryPrice} (holdSide=${holdSide})`)
         state.positions.set(sym, {
           symbol: sym, side, size, entryPrice,
           stopLoss: sl, takeProfit: tp, unrealized: 0, openedAt: Date.now(),
@@ -646,8 +648,13 @@ export async function closePosition(symbol: string, reason: string): Promise<Tra
     // cancel the SL + TP plan orders so they don't trigger after we've closed
     if (pos.liveSlOrderId) { await cancelOrder(symbol, pos.liveSlOrderId, { product }) }
     if (pos.liveTpOrderId) { await cancelOrder(symbol, pos.liveTpOrderId, { product }) }
-    // place a market close order (opposite side, tradeSide='close' for futures)
-    const closeSide = pos.side === 'LONG' ? 'SHORT' : 'LONG'
+    // place a market close order — for futures, Bitget needs the CORRECT side:
+    // To close a LONG: side=sell, tradeSide=close
+    // To close a SHORT: side=buy, tradeSide=close
+    // placeMarketEntry converts LONG→buy, SHORT→sell
+    // So to close a SHORT (need buy), pass 'LONG' → buy
+    // To close a LONG (need sell), pass 'SHORT' → sell
+    const closeSide: TradeSide = pos.side === 'LONG' ? 'SHORT' : 'LONG'
     const closeResult = await placeMarketEntry(symbol, closeSide, pos.size, {
       product: state.risk.product,
       tradeSide: 'close',
