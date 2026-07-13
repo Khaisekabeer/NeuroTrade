@@ -1,11 +1,9 @@
-// Market-data microservice — single source of truth for simulated crypto prices.
-// Streams 1m candles + ticks for BTC/USDT, ETH/USDT, SOL/USDT over Socket.IO
-// on port 3003. Uses a geometric-brownian-motion + mean-reversion + occasional
-// shock model so the price action looks realistic (trends, volatility clusters,
-// news-like spikes) for the trading agents to react to.
+// Market-data microservice — DYNAMIC symbol management.
+// No hardcoded symbols. The main app adds/removes symbols at runtime via
+// the 'add-symbol' / 'remove-symbol' Socket.IO events. On connect, the app
+// sends the current list. Prices are simulated using GBM + mean reversion.
 //
 // IMPORTANT: path MUST be '/' so the Caddy gateway forwards correctly.
-// Frontend connects via io("/?XTransformPort=3003").
 
 import { createServer } from 'http'
 import { Server } from 'socket.io'
@@ -16,52 +14,80 @@ interface Sym {
   symbol: string
   price: number
   base: string
-  drift: number       // per-tick drift
-  vol: number         // per-tick volatility
-  meanRevert: number  // pull toward anchor
+  drift: number
+  vol: number
+  meanRevert: number
   anchor: number
-  history: number[]   // recent closes for vol clustering
+  history: number[]
   candles: any[]
   currentCandle: any
   volume24h: number
   open24h: number
 }
 
-const SYMS: Sym[] = [
-  { symbol: 'BTC/USDT', base: 'BTC', price: 67250, drift: 0.00002, vol: 0.0009, meanRevert: 0.002, anchor: 67000, history: [], candles: [], currentCandle: null, volume24h: 18e9, open24h: 66500 },
-  { symbol: 'ETH/USDT', base: 'ETH', price: 3480, drift: 0.00003, vol: 0.0011, meanRevert: 0.002, anchor: 3460, history: [], candles: [], currentCandle: null, volume24h: 9e9, open24h: 3440 },
-  { symbol: 'SOL/USDT', base: 'SOL', price: 168.4, drift: 0.00005, vol: 0.0016, meanRevert: 0.003, anchor: 167, history: [], candles: [], currentCandle: null, volume24h: 3.5e9, open24h: 164 },
-  { symbol: 'XRP/USDT', base: 'XRP', price: 0.62, drift: 0.00004, vol: 0.0014, meanRevert: 0.003, anchor: 0.615, history: [], candles: [], currentCandle: null, volume24h: 1.2e9, open24h: 0.61 },
-  { symbol: 'DOGE/USDT', base: 'DOGE', price: 0.14, drift: 0.00005, vol: 0.0018, meanRevert: 0.003, anchor: 0.139, history: [], candles: [], currentCandle: null, volume24h: 0.8e9, open24h: 0.138 },
-  { symbol: 'ADA/USDT', base: 'ADA', price: 0.45, drift: 0.00004, vol: 0.0015, meanRevert: 0.003, anchor: 0.448, history: [], candles: [], currentCandle: null, volume24h: 0.6e9, open24h: 0.44 },
-]
+const SYMS: Map<string, Sym> = new Map()
+const CANDLE_MS = 60_000
 
-const CANDLE_MS = 60_000 // 1 minute
+// Default seed prices for common coins (used when adding a symbol that
+// hasn't been seen before). For unknown coins, price = 1.0.
+const SEED_PRICES: Record<string, number> = {
+  'BTC': 67000, 'ETH': 3500, 'SOL': 170, 'XRP': 0.62, 'DOGE': 0.14,
+  'ADA': 0.45, 'AVAX': 35, 'LINK': 14, 'MATIC': 0.8, 'DOT': 7,
+  'LTC': 80, 'TRX': 0.12, 'ATOM': 9, 'NEAR': 5, 'APT': 8,
+  'ARB': 1.0, 'OP': 2.0, 'INJ': 25, 'SUI': 1.2, 'BNB': 600,
+}
 
-// seed initial candle history (300 candles)
-function seed() {
-  const now = Date.now()
-  for (const s of SYMS) {
-    let p = s.price * 0.985
-    for (let i = 299; i >= 0; i--) {
-      const open = p
-      // GBM step
-      const shock = (Math.random() - 0.5) * 2
-      const ret = s.drift + s.vol * shock + (s.anchor - p) / s.anchor * s.meanRevert
-      const close = Math.max(0.01, open * (1 + ret))
-      const high = Math.max(open, close) * (1 + Math.random() * 0.0012)
-      const low = Math.min(open, close) * (1 - Math.random() * 0.0012)
-      const volume = (s.base === 'BTC' ? 8e5 : s.base === 'ETH' ? 4e6 : 5e7) * (0.6 + Math.random())
-      s.candles.push({ symbol: s.symbol, timeframe: '1m', openTime: now - i * CANDLE_MS, open, high, low, close, volume })
-      p = close
-    }
-    s.price = s.candles[s.candles.length - 1].close
-    s.anchor = s.price
-    s.open24h = s.candles[Math.max(0, s.candles.length - 1440)]?.open ?? s.price
-    s.currentCandle = null
+function createSym(symbol: string, price?: number): Sym {
+  const base = symbol.split('/')[0]
+  const p = price || SEED_PRICES[base] || 1.0
+  return {
+    symbol,
+    base,
+    price: p,
+    drift: 0.00003 + Math.random() * 0.00002,
+    vol: 0.0010 + Math.random() * 0.0008,
+    meanRevert: 0.002,
+    anchor: p,
+    history: [],
+    candles: [],
+    currentCandle: null,
+    volume24h: 1e9,
+    open24h: p * 0.99,
   }
 }
-seed()
+
+function seedSym(s: Sym) {
+  const now = Date.now()
+  let p = s.price * 0.985
+  for (let i = 299; i >= 0; i--) {
+    const open = p
+    const shock = (Math.random() - 0.5) * 2
+    const ret = s.drift + s.vol * shock + (s.anchor - p) / s.anchor * s.meanRevert
+    const close = Math.max(0.01, open * (1 + ret))
+    const high = Math.max(open, close) * (1 + Math.random() * 0.0012)
+    const low = Math.min(open, close) * (1 - Math.random() * 0.0012)
+    const volume = 1e6 * (0.6 + Math.random())
+    s.candles.push({ symbol: s.symbol, timeframe: '1m', openTime: now - i * CANDLE_MS, open, high, low, close, volume })
+    p = close
+  }
+  s.price = s.candles[s.candles.length - 1].close
+  s.anchor = s.price
+  s.currentCandle = null
+}
+
+function addSymbol(symbol: string, price?: number) {
+  if (SYMS.has(symbol)) return
+  const s = createSym(symbol, price)
+  seedSym(s)
+  SYMS.set(symbol, s)
+  console.log(`[market-data] added symbol ${symbol} @ ${s.price}`)
+}
+
+function removeSymbol(symbol: string) {
+  if (SYMS.delete(symbol)) {
+    console.log(`[market-data] removed symbol ${symbol}`)
+  }
+}
 
 function newCandle(s: Sym, t: number) {
   const open = s.price
@@ -70,10 +96,8 @@ function newCandle(s: Sym, t: number) {
 
 function step(s: Sym) {
   const t = Date.now()
-  // ensure current candle exists for this minute
   const minuteStart = Math.floor(t / CANDLE_MS) * CANDLE_MS
   if (!s.currentCandle || s.currentCandle.openTime !== minuteStart) {
-    // close previous candle, push, trim
     if (s.currentCandle) {
       s.candles.push(s.currentCandle)
       if (s.candles.length > 500) s.candles.shift()
@@ -82,7 +106,6 @@ function step(s: Sym) {
     }
     newCandle(s, minuteStart)
   }
-  // volatility clustering: scale vol by recent realized range
   const recent = s.history.slice(-20)
   let realized = 0
   if (recent.length > 1) {
@@ -91,21 +114,17 @@ function step(s: Sym) {
     realized = Math.sqrt(rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length)
   }
   const volScale = Math.max(0.5, Math.min(2.2, realized / s.vol || 1))
-  // occasional shock (news)
   const shock = Math.random() < 0.012 ? (Math.random() - 0.5) * 8 : 0
   const z = (Math.random() - 0.5) * 2 + shock
   const ret = s.drift + s.vol * volScale * z + (s.anchor - s.price) / s.anchor * s.meanRevert
   let newPrice = Math.max(0.01, s.price * (1 + ret))
-  // slowly drift the anchor so we get trends
   s.anchor = s.anchor * (1 + s.drift * 0.5) + newPrice * 0.0005
   s.price = newPrice
-  // update candle
   s.currentCandle.close = newPrice
   s.currentCandle.high = Math.max(s.currentCandle.high, newPrice)
   s.currentCandle.low = Math.min(s.currentCandle.low, newPrice)
-  s.currentCandle.volume += Math.random() * (s.base === 'BTC' ? 5000 : s.base === 'ETH' ? 25000 : 3e5)
+  s.currentCandle.volume += Math.random() * 5000
   s.volume24h = 0.97 * s.volume24h + 0.03 * (s.currentCandle.volume * CANDLE_MS / 1000)
-  // broadcast
   io.emit('tick', { symbol: s.symbol, price: newPrice, ts: t })
   io.emit('candle', s.currentCandle)
 }
@@ -114,14 +133,14 @@ const httpServer = createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
   if (req.url && req.url.startsWith('/api/history')) {
     const u = new URL(req.url, 'http://localhost')
-    const symbol = u.searchParams.get('symbol') || 'BTC/USDT'
-    const s = SYMS.find((x) => x.symbol === symbol)
+    const symbol = u.searchParams.get('symbol') || ''
+    const s = SYMS.get(symbol)
     res.setHeader('Content-Type', 'application/json')
     res.end(JSON.stringify({ symbol, candles: s ? s.candles.slice(-300) : [] }))
     return
   }
   res.setHeader('Content-Type', 'application/json')
-  res.end(JSON.stringify({ ok: true, service: 'market-data', symbols: SYMS.map((s) => s.symbol) }))
+  res.end(JSON.stringify({ ok: true, service: 'market-data', symbols: Array.from(SYMS.keys()) }))
 })
 
 const io = new Server(httpServer, {
@@ -132,25 +151,51 @@ const io = new Server(httpServer, {
 })
 
 io.on('connection', (socket) => {
-  // send full snapshot on connect
-  for (const s of SYMS) {
-    socket.emit('history', { symbol: s.symbol, candles: s.candles.slice(-300) })
+  // Send current symbols snapshot
+  for (const [sym, s] of SYMS) {
+    socket.emit('history', { symbol: sym, candles: s.candles.slice(-300) })
     if (s.currentCandle) socket.emit('candle', s.currentCandle)
-    socket.emit('tick', { symbol: s.symbol, price: s.price, ts: Date.now() })
+    socket.emit('tick', { symbol: sym, price: s.price, ts: Date.now() })
   }
+
+  // App sends the initial symbol list on connect
+  socket.on('init-symbols', (data: { symbols: Array<{ symbol: string; price?: number }> }) => {
+    if (!data?.symbols) return
+    for (const s of data.symbols) {
+      addSymbol(s.symbol, s.price)
+    }
+    console.log(`[market-data] init-symbols: ${data.symbols.map(s => s.symbol).join(', ')}`)
+  })
+
+  socket.on('add-symbol', (data: { symbol: string; price?: number }) => {
+    if (data?.symbol) addSymbol(data.symbol, data.price)
+  })
+
+  socket.on('remove-symbol', (data: { symbol: string }) => {
+    if (data?.symbol) removeSymbol(data.symbol)
+  })
+
   socket.on('get-history', ({ symbol }: { symbol: string }) => {
-    const s = SYMS.find((x) => x.symbol === symbol)
-    if (s) socket.emit('history', { symbol: s.symbol, candles: s.candles.slice(-300) })
+    const s = SYMS.get(symbol)
+    if (s) socket.emit('history', { symbol, candles: s.candles.slice(-300) })
   })
 })
 
-// tick every 1.2s per symbol (staggered)
-SYMS.forEach((s, i) => {
-  setTimeout(() => {
-    setInterval(() => step(s), 1200)
-  }, i * 400)
-})
+// Tick every 1.2s per symbol (staggered)
+let tickTimer: NodeJS.Timeout | null = null
+function startTicker() {
+  if (tickTimer) clearInterval(tickTimer)
+  let i = 0
+  tickTimer = setInterval(() => {
+    const syms = Array.from(SYMS.values())
+    if (syms.length === 0) return
+    const s = syms[i % syms.length]
+    step(s)
+    i++
+  }, 200) // 200ms per symbol = 5 symbols/sec, each gets ticked every ~1s
+}
+startTicker()
 
 httpServer.listen(PORT, () => {
-  console.log(`market-data service running on port ${PORT}`)
+  console.log(`market-data service running on port ${PORT} (dynamic symbols — no defaults)`)
 })

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { TRADE_SYMBOLS, addSymbol, removeSymbol } from '@/lib/types'
 import { fetchLiveTickers } from '@/lib/bitget-executor'
-import { seedNewSymbol, manualClose } from '@/lib/trading-state'
+import { seedNewSymbol, manualClose, notifySymbolRemoved } from '@/lib/trading-state'
 import { db } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
@@ -32,6 +32,7 @@ export async function POST(req: Request) {
       // Continue with removal anyway
     }
     removeSymbol(symbol)
+    notifySymbolRemoved(symbol)  // tell market service to stop generating prices
     // Persist to DB — delete the row so it doesn't come back on restart
     await db.tradingSymbol.deleteMany({ where: { symbol } }).catch(() => {})
     return NextResponse.json({ ok: true, symbols: TRADE_SYMBOLS, message: `Removed ${symbol}` })

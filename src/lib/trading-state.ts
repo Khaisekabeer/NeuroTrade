@@ -396,6 +396,7 @@ export async function setMode(mode: TradingMode) {
 export function getMode(): TradingMode { return state.mode }
 
 // Called when a new symbol is added at runtime — seeds its tick + candle buffer
+// + notifies the market microservice to start generating prices for it
 export function seedNewSymbol(symbol: string, price: number) {
   if (!state.ticks.has(symbol)) {
     state.ticks.set(symbol, {
@@ -423,6 +424,17 @@ export function seedNewSymbol(symbol: string, price: number) {
     }
     state.candles.set(symbol, arr)
   }
+  // Notify the market microservice to start streaming this symbol
+  if (socket && socket.connected) {
+    socket.emit('add-symbol', { symbol, price })
+  }
+}
+
+// Called when a symbol is removed — notifies the market microservice
+export function notifySymbolRemoved(symbol: string) {
+  if (socket && socket.connected) {
+    socket.emit('remove-symbol', { symbol })
+  }
 }
 
 export function isLiveConfigured(): boolean {
@@ -436,7 +448,15 @@ export function connectMarket() {
   try {
     socket = io(MARKET_URL, { path: '/', transports: ['websocket'], reconnection: true, reconnectionAttempts: Infinity, timeout: 3000 })
     g.__ND_SOCKET__ = socket
-    socket.on('connect', () => { state.connected = true; stopFallback() })
+    socket.on('connect', () => {
+      state.connected = true
+      stopFallback()
+      // Send the current symbol list to the market service so it knows
+      // which symbols to generate prices for (no hardcoded defaults)
+      socket?.emit('init-symbols', {
+        symbols: TRADE_SYMBOLS.map(s => ({ symbol: s.symbol, price: s.price })),
+      })
+    })
     socket.on('disconnect', () => { state.connected = false; startFallback() })
     socket.on('tick', (t: { symbol: string; price: number }) => applyTick(t.symbol, t.price))
     socket.on('candle', (c: Candle) => {
