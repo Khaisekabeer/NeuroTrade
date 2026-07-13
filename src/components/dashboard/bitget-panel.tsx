@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { Radio, RefreshCw, Loader2, ExternalLink, KeyRound, Wallet } from 'lucide-react'
-import { useDashboard, SYMBOL_TO_BITGET, SYMBOLS } from '@/lib/dashboard-store'
+import { useDashboard, toBitgetSymbol } from '@/lib/dashboard-store'
 import { Panel, LiveDot } from './panel'
 import { fmtPrice, fmtPctRaw } from './format'
 import { toast } from 'sonner'
@@ -40,7 +40,8 @@ export function BitgetPanel() {
   async function fetchTickers() {
     setLoading(true)
     try {
-      const syms = SYMBOLS.map((s) => SYMBOL_TO_BITGET[s]).join(',')
+      const ticks = useDashboard.getState().ticks
+      const syms = Object.keys(ticks).map(toBitgetSymbol).join(',')
       const res = await fetch(`/api/bitget?action=tickers&product=${product}&symbols=${encodeURIComponent(syms)}`, { cache: 'no-store' })
       const data = await res.json().catch(() => ({}))
       if (data?.live && Array.isArray(data?.data)) {
@@ -188,7 +189,7 @@ export function BitgetPanel() {
               <span className="text-right">Sim</span>
             </div>
             {tickers.map((t) => {
-              const sym = SYMBOLS.find((s) => SYMBOL_TO_BITGET[s] === t.symbol) ?? t.symbol
+              const sym = Object.keys(useDashboard.getState().ticks).find(s => toBitgetSymbol(s) === t.symbol) ?? t.symbol
               const live = Number(t.lastPr)
               const simTick = typeof sym === 'string' ? ticks[sym] : undefined
               const sim = simTick?.price ?? 0

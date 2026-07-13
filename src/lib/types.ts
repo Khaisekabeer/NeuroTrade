@@ -113,16 +113,10 @@ export interface SymbolMeta {
   volume24h: number
 }
 
-// Mutable runtime list of trading symbols. Can be updated from the dashboard
-// via the /api/symbols endpoint. Defaults to 6 popular coins.
-export const TRADE_SYMBOLS: SymbolMeta[] = [
-  { symbol: 'BTC/USDT', name: 'Bitcoin', base: 'BTC', price: 67250, change24h: 0, volume24h: 0 },
-  { symbol: 'ETH/USDT', name: 'Ethereum', base: 'ETH', price: 3480, change24h: 0, volume24h: 0 },
-  { symbol: 'SOL/USDT', name: 'Solana', base: 'SOL', price: 168.4, change24h: 0, volume24h: 0 },
-  { symbol: 'XRP/USDT', name: 'XRP', base: 'XRP', price: 0.62, change24h: 0, volume24h: 0 },
-  { symbol: 'DOGE/USDT', name: 'Dogecoin', base: 'DOGE', price: 0.14, change24h: 0, volume24h: 0 },
-  { symbol: 'ADA/USDT', name: 'Cardano', base: 'ADA', price: 0.45, change24h: 0, volume24h: 0 },
-]
+// Mutable runtime list of trading symbols. Starts EMPTY — symbols are
+// added via the Manage Tickers panel and persisted to the TradingSymbol
+// DB table. On startup, restoreFromDb() loads them from the DB.
+export const TRADE_SYMBOLS: SymbolMeta[] = []
 
 // Helper: add a new symbol to the list (if not already present)
 export function addSymbol(sym: SymbolMeta) {

@@ -70,26 +70,26 @@ export interface BitgetTicker {
   quoteVolume24h: string
 }
 
-export const SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT', 'ADA/USDT'] as const
-export type SymbolCode = (typeof SYMBOLS)[number]
+// DYNAMIC symbol helpers — no hardcoded lists. Symbols come from /api/symbols
+// which reads from the DB. These functions convert format on the fly.
 
-export const SYMBOL_TO_TV: Record<string, string> = {
-  'BTC/USDT': 'BITGET:BTCUSDT',
-  'ETH/USDT': 'BITGET:ETHUSDT',
-  'SOL/USDT': 'BITGET:SOLUSDT',
-  'XRP/USDT': 'BITGET:XRPUSDT',
-  'DOGE/USDT': 'BITGET:DOGEUSDT',
-  'ADA/USDT': 'BITGET:ADAUSDT',
+// Convert "BTC/USDT" → "BITGET:BTCUSDT" for TradingView
+export function toTvSymbol(symbol: string): string {
+  return `BITGET:${symbol.replace('/', '')}`
 }
 
-export const SYMBOL_TO_BITGET: Record<string, string> = {
-  'BTC/USDT': 'BTCUSDT',
-  'ETH/USDT': 'ETHUSDT',
-  'SOL/USDT': 'SOLUSDT',
-  'XRP/USDT': 'XRPUSDT',
-  'DOGE/USDT': 'DOGEUSDT',
-  'ADA/USDT': 'ADAUSDT',
+// Convert "BTC/USDT" → "BTCUSDT" for Bitget API
+export function toBitgetSymbol(symbol: string): string {
+  return symbol.replace('/', '')
 }
+
+// Legacy aliases for components that import them (now dynamic functions)
+export const SYMBOL_TO_TV = new Proxy({} as Record<string, string>, {
+  get: (_, key: string) => toTvSymbol(key),
+})
+export const SYMBOL_TO_BITGET = new Proxy({} as Record<string, string>, {
+  get: (_, key: string) => toBitgetSymbol(key),
+})
 
 export const AGENT_ORDER: AgentName[] = ['SENTIMENT', 'TECHNICAL', 'ML', 'RISK', 'ORCHESTRATOR']
 
@@ -138,7 +138,7 @@ interface DashboardState {
 }
 
 export const useDashboard = create<DashboardState>((set, get) => ({
-  activeSymbol: 'BTC/USDT',
+  activeSymbol: '',  // set dynamically when symbols load
   setActiveSymbol: (s) => set({ activeSymbol: s }),
 
   ticks: {},

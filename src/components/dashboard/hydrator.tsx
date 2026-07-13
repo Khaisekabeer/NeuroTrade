@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { io, type Socket } from 'socket.io-client'
-import { useDashboard, SYMBOLS } from '@/lib/dashboard-store'
+import { useDashboard } from '@/lib/dashboard-store'
 import type { PortfolioSnapshot, MLPrediction, EngineStatus } from '@/lib/dashboard-store'
 import type {
   Candle,
@@ -145,6 +145,20 @@ export function DashboardHydrator() {
       }
     }
 
+    // Fetch the DYNAMIC symbol list from the backend (no hardcoded symbols)
+    const fetchDynamicSymbols = async () => {
+      const res = await fetch('/api/symbols', { cache: 'no-store' })
+      const data = await res.json().catch(() => ({}))
+      const syms: string[] = (data?.symbols || []).map((s: any) => s.symbol)
+      // Set active symbol if empty
+      if (syms.length > 0 && !useDashboard.getState().activeSymbol) {
+        useDashboard.getState().setActiveSymbol(syms[0])
+      }
+      // Fetch agents + ML for each symbol
+      syms.forEach((s) => { fetchAgentsFor(s); fetchMLFor(s) })
+      return syms
+    }
+
     // initial fetch (stagger to avoid burst)
     fetchPortfolio()
     const t1 = setTimeout(() => fetchTrades(), 200)
@@ -153,10 +167,7 @@ export function DashboardHydrator() {
     const t4 = setTimeout(() => fetchStatus(), 800)
     const t5 = setTimeout(() => fetchBitgetStatus(), 1000)
     const t6 = setTimeout(() => fetchTicks(), 300)
-    SYMBOLS.forEach((s, i) => {
-      setTimeout(() => fetchAgentsFor(s), 1200 + i * 150)
-      setTimeout(() => fetchMLFor(s), 1600 + i * 150)
-    })
+    setTimeout(() => fetchDynamicSymbols(), 1200)
 
     // staggered intervals
     const ivPortfolio = setInterval(fetchPortfolio, 4000)
@@ -166,13 +177,16 @@ export function DashboardHydrator() {
     const ivStatus = setInterval(fetchStatus, 4000)
     const ivBitget = setInterval(fetchBitgetStatus, 15000)
     const ivTicks = setInterval(fetchTicks, 2500)
-    // poll agents + ML for ALL symbols so switching tabs is instant
+    // poll agents + ML for DYNAMIC symbols
     const ivAgents = setInterval(() => {
-      SYMBOLS.forEach((s) => fetchAgentsFor(s))
+      const syms = Object.keys(useDashboard.getState().ticks)
+      syms.forEach((s) => fetchAgentsFor(s))
     }, 5000)
     const ivML = setInterval(() => {
-      SYMBOLS.forEach((s) => fetchMLFor(s))
+      const syms = Object.keys(useDashboard.getState().ticks)
+      syms.forEach((s) => fetchMLFor(s))
     }, 6000)
+    const ivSymbols = setInterval(() => fetchDynamicSymbols(), 10000)
 
     return () => {
       mounted = false
@@ -192,6 +206,7 @@ export function DashboardHydrator() {
       clearInterval(ivTicks)
       clearInterval(ivAgents)
       clearInterval(ivML)
+      clearInterval(ivSymbols)
       if (socket) {
         socket.removeAllListeners()
         socket.disconnect()

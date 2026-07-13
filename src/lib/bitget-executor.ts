@@ -8,17 +8,9 @@
 // that the EXCHANGE honors even if your bot goes offline. We store their
 // orderIds on the Position row so we can cancel them when manually closing.
 
-const SYMBOL_TO_BITGET_SPOT: Record<string, string> = {
-  'BTC/USDT': 'BTCUSDT',
-  'ETH/USDT': 'ETHUSDT',
-  'SOL/USDT': 'SOLUSDT',
-  'XRP/USDT': 'XRPUSDT',
-  'DOGE/USDT': 'DOGEUSDT',
-  'ADA/USDT': 'ADAUSDT',
-}
-
+// Convert "BTC/USDT" → "BTCUSDT" dynamically (no hardcoded map)
 export function toBitgetSymbol(symbol: string): string {
-  return SYMBOL_TO_BITGET_SPOT[symbol] ?? symbol.replace('/', '')
+  return symbol.replace('/', '')
 }
 
 export interface LiveOrderResult {
@@ -231,8 +223,9 @@ export async function fetchLiveTickers(symbols: string[], product: 'spot' | 'fut
       return results.filter((t): t is NonNullable<typeof t> => t !== null && !isNaN(t.price) && t.price > 0)
     }
     // spot — try batch first, fall back to per-symbol if batch fails/partial
+    // Build reverse map from the symbols we requested (dynamic, not hardcoded)
     const reverseMap: Record<string, string> = {}
-    for (const k in SYMBOL_TO_BITGET_SPOT) reverseMap[SYMBOL_TO_BITGET_SPOT[k]] = k
+    for (const sym of symbols) reverseMap[toBitgetSymbol(sym)] = sym
 
     const mapTicker = (t: any) => ({
       symbol: reverseMap[t.symbol] || t.symbol,

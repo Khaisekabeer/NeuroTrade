@@ -737,11 +737,9 @@ export async function restoreFromDb() {
   try {
     // 0. Load persisted trading symbols from DB.
     // The DB is the SINGLE SOURCE OF TRUTH for which tickers to trade.
-    // If the DB is empty → NO tickers are traded (you start with a clean slate).
-    // Add tickers via the Manage Tickers panel.
+    // TRADE_SYMBOLS starts empty (no hardcoded defaults). If the DB has
+    // saved symbols, they're loaded here. If empty → no tickers → no trades.
     const dbSymbols = await db.tradingSymbol.findMany({ orderBy: { createdAt: 'asc' } })
-    // ALWAYS clear the hardcoded list and load from DB (even if empty)
-    TRADE_SYMBOLS.length = 0
     for (const s of dbSymbols) {
       TRADE_SYMBOLS.push({
         symbol: s.symbol, name: s.name, base: s.base,
