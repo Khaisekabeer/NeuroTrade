@@ -25,11 +25,14 @@ interface DebugData {
   bitgetDemo: boolean
 }
 
-function timeAgo(ts: number): string {
+// Bug #12: Client-only time display to avoid hydration mismatch
+function TimeAgo({ ts }: { ts: number }) {
+  const [mounted, setMounted] = React.useState(false)
+  React.useEffect(() => { setMounted(true) }, [])
+  if (!mounted || !ts) return <span>—</span>
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000))
-  if (s < 60) return `${s}s ago`
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  return `${Math.floor(s / 3600)}h ago`
+  const text = s < 60 ? `${s}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : `${Math.floor(s / 3600)}h ago`
+  return <span>{text}</span>
 }
 
 function truncate(s: string, n: number): string {
@@ -151,7 +154,7 @@ export function ApiMonitor() {
                       {e.ok ? 'OK' : 'ERR'}
                     </span>
                     <span className="text-[9px] text-zinc-600 shrink-0 tabular-nums">{e.durationMs}ms</span>
-                    <span className="text-[9px] text-zinc-600 shrink-0">{timeAgo(e.ts)}</span>
+                    <span className="text-[9px] text-zinc-600 shrink-0"><TimeAgo ts={e.ts} /></span>
                   </button>
                   {isOpen && (
                     <div className="mt-1.5 ml-5 space-y-1.5 text-[10px]">

@@ -413,7 +413,7 @@ export function seedNewSymbol(symbol: string, price: number) {
     const arr: Candle[] = []
     const now = Date.now()
     let p = price * 0.99
-    for (let i = 19; i >= 0; i--) {
+    for (let i = 99; i >= 0; i--) {  // Bug #10: seed 100 candles (was 20, agents need 100)
       const open = p
       const drift = (Math.random() - 0.5) * price * 0.002
       const close = Math.max(0.01, open + drift)
@@ -509,7 +509,11 @@ function updateUnrealized() {
   } else {
     state.portfolio.equity = state.portfolio.cash + openPnl
   }
-  state.portfolio.exposure = state.portfolio.equity > 0 ? exposure / state.portfolio.equity : 0
+  // Bug #9: Exposure should be margin-based, not notional-based.
+  // For futures: margin = notional / leverage. Exposure = total margin / equity.
+  const leverage = state.risk.product === 'futures' ? Math.min(state.risk.leverage, state.risk.leverageCap) : 1
+  const totalMargin = exposure / leverage
+  state.portfolio.exposure = state.portfolio.equity > 0 ? totalMargin / state.portfolio.equity : 0
   if (state.portfolio.equity > state.peakEquity) state.peakEquity = state.portfolio.equity
   state.portfolio.dayPnl = state.portfolio.equity - state.dayStartEquity
   state.portfolio.dayPnlPct = state.dayStartEquity > 0 ? state.portfolio.dayPnl / state.dayStartEquity : 0
@@ -767,8 +771,11 @@ export async function restoreFromDb() {
       console.log(`[restoreFromDb] loaded ${TRADE_SYMBOLS.length} symbols: ${TRADE_SYMBOLS.map(s => s.symbol).join(', ')}`)
     }
 
-    // 1. reload open positions into memory — clear first to avoid stale data on HMR
+    // Bug #6: Clear BOTH positions AND trades on HMR to avoid duplicates
     state.positions.clear()
+    state.trades = []
+    state.decisions = []
+    state.agentOutputs.clear()
     const dbPositions = await db.position.findMany()
     for (const p of dbPositions) {
       // Skip positions for symbols that are no longer in the active list
@@ -863,11 +870,14 @@ export async function closeAllPositions(): Promise<{ ok: boolean; closed: number
 
 // checkExits — skip positions for removed tickers (they'll be synced via
 // syncLivePositions instead)
+// Bug #3/#4: checkExits — in LIVE mode, skip SL/TP checking (exchange-side plan
+// orders handle it). Only check in PAPER mode to avoid double-closing + 22002 errors.
 export async function checkExits(): Promise<string[]> {
   const closed: string[] = []
+  // Bug #3: In LIVE mode, exchange-side SL/TP plan orders handle exits.
+  // checkExits would double-close → 22002 errors. Skip in LIVE mode.
+  if (state.mode === 'live') return closed
   for (const pos of state.positions.values()) {
-    // Skip if the symbol was removed from the active list — position sync
-    // will handle closing it on Bitget + cleaning up memory
     if (!TRADE_SYMBOLS.find((s) => s.symbol === pos.symbol)) continue
     const t = state.ticks.get(pos.symbol)
     if (!t) continue
@@ -887,18 +897,17 @@ export async function manualOpen(symbol: string, side: TradeSide, riskPct: numbe
   const price = side === 'LONG' ? t.ask : t.bid
   if (!price || price <= 0) return { ok: false, error: 'Invalid price for ' + symbol }
   const leverage = state.risk.product === 'futures' ? Math.min(state.risk.leverage, state.risk.leverageCap) : 1
-  const riskAmt = state.portfolio.equity * riskPct
   const stopDist = price * 0.015  // 1.5% stop distance (consistent with agent engine)
+  // Bug #8: use state.risk.maxRiskPerTrade instead of hardcoded 0.02
+  const actualRiskPct = riskPct || state.risk.maxRiskPerTrade
+  const riskAmt = state.portfolio.equity * actualRiskPct
   let size = (riskAmt / stopDist) * leverage
   // For futures: round to the symbol's contract size multiplier
   if (state.risk.product === 'futures') {
     await loadContractSpecs()
     size = roundToContractSize(symbol, size)
   }
-  // NOTE: We do NOT block small orders here. Bitget has its own minimums
-  // (spot: varies by symbol, futures: 1 contract). If the order is too small,
-  // Bitget will reject it and the error will show in the API Monitor panel.
-  // This allows trading with any capital — even $2 with high leverage.
+  // Bug #8 fixed: riskPct now uses state.risk.maxRiskPerTrade as fallback
   const sl = side === 'LONG' ? price - stopDist : price + stopDist
   const tp = side === 'LONG' ? price + stopDist * 2 : price - stopDist * 2
   const trade = await openPosition(symbol, side, size, sl, tp, 1, 'Manual override by operator')
@@ -918,6 +927,10 @@ export function resetPaperAccount() {
   state.trades = []
   state.decisions = []
   state.agentOutputs.clear()
+  // Bug #15: Also clear the DB tables so stale data doesn't persist
+  db.agentDecision.deleteMany({}).catch((e: any) => console.error('[reset] agentDecision:', e?.message))
+  db.trade.deleteMany({}).catch((e: any) => console.error('[reset] trade:', e?.message))
+  db.position.deleteMany({}).catch((e: any) => console.error('[reset] position:', e?.message))
   state.portfolio = { cash: 100_000, equity: 100_000, exposure: 0, openPnl: 0, realizedPnl: 0, dayPnl: 0, dayPnlPct: 0, winRate: 0 }
   state.peakEquity = 100_000
   state.dayStartEquity = 100_000

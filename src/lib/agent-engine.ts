@@ -364,10 +364,13 @@ function runRiskAgent(symbol: string, direction: Signal): AgentOutput {
   }
 }
 
+// Bug #13: Extract agent weights to a single constant (was duplicated in 2 places)
+const AGENT_WEIGHTS: Record<string, number> = { SENTIMENT: 0.2, TECHNICAL: 0.3, ML: 0.35, RISK: 0.15 }
+
 // ---------------- ORCHESTRATOR ----------------
 async function runOrchestrator(symbol: string, agents: AgentOutput[]): Promise<{ signal: Signal; confidence: number; rationale: string }> {
   // weighted deterministic vote (fallback / baseline)
-  const weights: Record<string, number> = { SENTIMENT: 0.2, TECHNICAL: 0.3, ML: 0.35, RISK: 0.15 }
+  const weights = AGENT_WEIGHTS
   let vote = 0
   let wsum = 0
   for (const a of agents) {
@@ -565,7 +568,7 @@ async function runCycle() {
       let orchestrator
       if (riskActuallyBlocked || (allFlat && tentativeIsFlat)) {
         // use deterministic vote directly — no LLM call needed
-        const weights: Record<string, number> = { SENTIMENT: 0.2, TECHNICAL: 0.3, ML: 0.35, RISK: 0.15 }
+        const weights = AGENT_WEIGHTS
         let vote = 0, wsum = 0
         for (const a of [sentiment, technical, ml, risk]) {
           const dir = a.signal === 'LONG' ? 1 : a.signal === 'SHORT' ? -1 : 0
