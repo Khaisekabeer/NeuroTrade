@@ -58,7 +58,7 @@ export function TechnicalPanel() {
       icon={<LineChartIcon className="h-4 w-4" />}
       actions={
         tech ? (
-          <span className="text-[10px] text-zinc-500">updated {new Date(tech.ts).toLocaleTimeString('en-US', { hour12: false })}</span>
+          <span className="text-[10px] text-zinc-500">updated {tech.ts ? new Date(tech.ts).toLocaleTimeString('en-US', { hour12: false }) : '--'}</span>
         ) : null
       }
     >
