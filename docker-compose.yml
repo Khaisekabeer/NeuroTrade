@@ -1,0 +1,55 @@
+# docker-compose.yml — runs the entire Neuro Trade system with ONE command
+#
+# Usage:
+#   docker-compose up --build    (start everything)
+#   docker-compose up -d         (start in background)
+#   docker-compose down          (stop everything)
+#   docker-compose logs -f       (view logs)
+#
+# This starts:
+#   1. market-data service (port 3003) — simulated price feed
+#   2. neurotrade dashboard (port 3000) — the main app + agents + Bitget
+#
+# Your .env file is automatically loaded — put your Bitget API keys there.
+
+services:
+  # ---- Market Data Service ----
+  market-data:
+    build:
+      context: .
+      dockerfile: Dockerfile.market
+    ports:
+      - "3003:3003"
+    restart: always
+    environment:
+      - NODE_ENV=production
+
+  # ---- Neuro Trade Dashboard ----
+  neurotrade:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    restart: always
+    depends_on:
+      - market-data
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # Pass through your .env vars (Bitget keys, LLM provider, etc.)
+      - BITGET_API_KEY=${BITGET_API_KEY:-}
+      - BITGET_API_SECRET=${BITGET_API_SECRET:-}
+      - BITGET_API_PASSPHRASE=${BITGET_API_PASSPHRASE:-}
+      - BITGET_DEMO=${BITGET_DEMO:-true}
+      - LLM_PROVIDER=${LLM_PROVIDER:-z-ai}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DATABASE_URL=file:/app/db/custom.db
+    volumes:
+      # Persist the SQLite database across container restarts
+      - neurotrade-db:/app/db
+
+volumes:
+  neurotrade-db:
+    driver: local

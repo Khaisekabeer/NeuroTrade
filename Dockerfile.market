@@ -1,0 +1,17 @@
+# Dockerfile for the market-data microservice
+FROM oven/bun:1.1
+
+WORKDIR /app
+
+# Copy package files + install
+COPY mini-services/market-data/package.json ./
+RUN bun install
+
+# Copy source
+COPY mini-services/market-data/index.ts ./
+
+# Expose port 3003
+EXPOSE 3003
+
+# Start the market service
+CMD ["bun", "--hot", "index.ts"]
