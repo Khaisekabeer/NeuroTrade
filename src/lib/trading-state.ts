@@ -382,7 +382,7 @@ export async function setMode(mode: TradingMode) {
 
     console.log('[trading-state] switched to LIVE mode — real Bitget prices + real orders + real balance')
   } else {
-    // switching to paper: stop live polling, reconnect simulated feed
+    // switching to paper: stop live polling, restart with real Bitget prices (paper execution)
     stopLivePricePolling()
     state.mode = 'paper'
     state.connected = false
@@ -390,8 +390,8 @@ export async function setMode(mode: TradingMode) {
     state.portfolio.cash = 100_000 + state.portfolio.realizedPnl
     updateUnrealized()
     state.peakEquity = Math.max(state.portfolio.equity, state.peakEquity)
-    connectMarket()
-    console.log('[trading-state] switched to PAPER mode — simulated prices')
+    connectMarket()  // now always uses real Bitget prices
+    console.log('[trading-state] switched to PAPER mode — real Bitget prices + in-memory execution')
   }
 }
 
@@ -444,47 +444,11 @@ export function isLiveConfigured(): boolean {
 }
 
 export function connectMarket() {
-  // In LIVE mode, skip the simulated microservice and poll real Bitget prices.
-  if (state.mode === 'live') { startLivePricePolling(); return }
-  if (socket) return
-  try {
-    socket = io(MARKET_URL, { path: '/', transports: ['websocket'], reconnection: true, reconnectionAttempts: Infinity, timeout: 3000 })
-    g.__ND_SOCKET__ = socket
-    socket.on('connect', () => {
-      state.connected = true
-      stopFallback()
-      // Send the current symbol list to the market service so it knows
-      // which symbols to generate prices for (no hardcoded defaults)
-      socket?.emit('init-symbols', {
-        symbols: TRADE_SYMBOLS.map(s => ({ symbol: s.symbol, price: s.price })),
-      })
-    })
-    socket.on('disconnect', () => { state.connected = false; startFallback() })
-    socket.on('tick', (t: { symbol: string; price: number }) => applyTick(t.symbol, t.price))
-    socket.on('candle', (c: Candle) => {
-      // replace last candle if same openTime else push
-      const arr = state.candles.get(c.symbol)
-      if (arr && arr.length && arr[arr.length - 1].openTime === c.openTime) {
-        arr[arr.length - 1] = c
-      } else {
-        pushNewCandle(c)
-      }
-      const t = state.ticks.get(c.symbol)
-      if (t) { t.price = c.close; t.ts = Date.now() }
-      updateUnrealized()
-    })
-    socket.on('history', (data: { symbol: string; candles: Candle[] }) => {
-      if (data.candles?.length) state.candles.set(data.symbol, data.candles.slice(-MAX_CANDLES))
-    })
-    // request history
-    socket.on('connect', () => {
-      for (const s of TRADE_SYMBOLS) socket?.emit('get-history', { symbol: s.symbol })
-    })
-    // if no connect in 3s, fallback
-    setTimeout(() => { if (!state.connected) startFallback() }, 3000)
-  } catch {
-    startFallback()
-  }
+  // ALWAYS use real Bitget public API prices — even in PAPER mode.
+  // This ensures the trading panel shows accurate prices matching Bitget.
+  // PAPER mode: real prices + in-memory execution (no real orders)
+  // LIVE mode: real prices + real Bitget orders
+  startLivePricePolling()
 }
 
 function updateUnrealized() {
