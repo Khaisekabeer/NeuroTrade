@@ -112,6 +112,12 @@ class Engine:
                                   "tp": price + stop_dist * cfg.atr_target_mult if sig == "LONG" else price - stop_dist * cfg.atr_target_mult}
         log.info(f"  opened {sig} {symbol} size={size:.4f} @ {price:.2f} SL={self.positions[symbol]['sl']:.2f}")
 
+    # Alias for the FastAPI server to call
+    async def _execute(self, symbol: str, decision: dict, atr: float):
+        price = (await self.client.fetch_ticker(symbol))['last']
+        atr_pct = atr / price if price > 0 else 0.01
+        await self.execute(symbol, decision, price, atr_pct)
+
     async def _close(self, symbol: str, reason: str):
         pos = self.positions.pop(symbol, None)
         if not pos:

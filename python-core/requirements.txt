@@ -13,3 +13,5 @@ aiohttp>=3.9.0
 beautifulsoup4>=4.12.0
 yfinance>=0.2.37
 rich>=13.7.0
+fastapi>=0.104.0
+uvicorn>=0.23.0
