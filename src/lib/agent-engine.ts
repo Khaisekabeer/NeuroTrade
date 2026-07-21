@@ -25,10 +25,12 @@ import type { AgentOutput, OrchestratorDecision, Signal, TradeSide } from './typ
 //   3. Restart — the sentiment + orchestrator agents use DeepSeek instead of z-ai.
 // ─────────────────────────────────────────────────────────────────────
 
-type LlmProvider = 'z-ai' | 'deepseek' | 'openai'
+type LlmProvider = 'z-ai' | 'deepseek' | 'openai' | 'ollama'
 const LLM_PROVIDER: LlmProvider = (process.env.LLM_PROVIDER as LlmProvider) || 'z-ai'
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || ''
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || ''
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434'
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3'
 
 // Universal chat completion interface
 interface ChatMessage { role: string; content: string }
@@ -91,6 +93,25 @@ async function llmChat(messages: ChatMessage[]): Promise<ChatResult> {
     if (!res.ok) throw new Error(`OpenAI API ${res.status}`)
     const json = await res.json()
     return { content: json?.choices?.[0]?.message?.content || '' }
+  }
+  if (LLM_PROVIDER === 'ollama') {
+    // Ollama runs Llama 3 locally on your machine — no API key, no rate limits
+    const res = await fetch(`${OLLAMA_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        stream: false,
+        options: { temperature: 0.3 },
+      }),
+    })
+    if (!res.ok) {
+      const errBody = await res.text()
+      throw new Error(`Ollama API ${res.status}: ${errBody.slice(0, 200)} — Is 'ollama serve' running?`)
+    }
+    const json = await res.json()
+    return { content: json?.message?.content || '' }
   }
   // default: z-ai
   const zai = await getZAI()
