@@ -79,10 +79,28 @@ async def get_prediction(symbol: str):
 from agents import technical_agent
 
 
-class TradeRequest(BaseModel):
-    action: str  # 'open' or 'close'
+class SymbolRequest(BaseModel):
+    action: str  # 'add' or 'remove'
     symbol: str
-    side: str | None = None  # 'LONG' or 'SHORT'
+
+
+@app.post("/api/symbols")
+async def update_symbols(req: SymbolRequest):
+    """Dynamically add or remove a trading symbol from the Python engine."""
+    if req.action == "add":
+        if req.symbol not in engine.symbols:
+            engine.symbols.append(req.symbol)
+            log.info(f"Symbol added to engine: {req.symbol}")
+        return {"ok": True, "symbols": engine.symbols}
+    elif req.action == "remove":
+        if req.symbol in engine.symbols:
+            engine.symbols.remove(req.symbol)
+            log.info(f"Symbol removed from engine: {req.symbol}")
+            # Close position if open
+            if req.symbol in engine.positions:
+                await engine._close(req.symbol, "Symbol removed from UI")
+        return {"ok": True, "symbols": engine.symbols}
+    raise HTTPException(status_code=400, detail="Invalid action")
 
 
 @app.post("/api/trade")

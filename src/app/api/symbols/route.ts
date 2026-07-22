@@ -22,18 +22,25 @@ export async function POST(req: Request) {
 
   if (action === 'remove') {
     // Close any open position for this symbol BEFORE removing it.
-    // Use try/catch so removal succeeds even if the position close fails
-    // (e.g. no position, or Bitget API error) — the symbol should still be
-    // removed from the trading list.
     try {
       await manualClose(symbol)
     } catch (e: any) {
       console.warn(`[symbols] close position failed for ${symbol}:`, e?.message)
-      // Continue with removal anyway
     }
     removeSymbol(symbol)
     notifySymbolRemoved(symbol)
     await db.tradingSymbol.deleteMany({ where: { symbol } }).catch(() => {})
+    
+    // Forward to Python Core if it's running
+    try {
+      await fetch('http://localhost:8000/api/symbols', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remove', symbol }),
+        signal: AbortSignal.timeout(2000) // 2s timeout - don't block if Python is offline
+      })
+    } catch { /* Python core not running, ignore */ }
+    
     return NextResponse.json({ ok: true, symbols: TRADE_SYMBOLS, message: `Removed ${symbol}` })
   }
 
@@ -41,7 +48,6 @@ export async function POST(req: Request) {
     if (TRADE_SYMBOLS.find((s) => s.symbol === symbol)) {
       return NextResponse.json({ ok: false, error: `${symbol} is already in the list` }, { status: 400 })
     }
-    // Fetch the live price from Bitget to verify the symbol exists
     try {
       let price = 0
       const spotTicks = await fetchLiveTickers([symbol], 'spot')
@@ -61,6 +67,17 @@ export async function POST(req: Request) {
         create: { symbol, name: base, base, price },
         update: { symbol, name: base, base, price },
       }).catch(() => {})
+
+      // Forward to Python Core if it's running
+      try {
+        await fetch('http://localhost:8000/api/symbols', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'add', symbol }),
+          signal: AbortSignal.timeout(2000)
+        })
+      } catch { /* Python core not running, ignore */ }
+
       return NextResponse.json({ ok: true, symbols: TRADE_SYMBOLS, message: `Added ${symbol} at $${price}` })
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: `Failed to verify ${symbol}: ${e?.message}` }, { status: 502 })
