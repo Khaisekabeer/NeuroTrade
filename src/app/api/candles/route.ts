@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server'
-import { getCandles } from '@/lib/trading-state'
-
+import { pythonGet } from '@/lib/python-proxy'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
-  const symbol = searchParams.get('symbol') || 'BTC/USDT'
-  const limit = Number(searchParams.get('limit') || 200)
-  return NextResponse.json(getCandles(symbol, limit))
+  const symbol = searchParams.get('symbol') || ''
+  const limit = searchParams.get('limit') || 200
+  const data = await pythonGet(`/api/candles?symbol=${encodeURIComponent(symbol)}&limit=${limit}`)
+  return NextResponse.json(data || [])
 }

@@ -1,19 +1,8 @@
 import { NextResponse } from 'next/server'
-import { snapshotPortfolio, getMode, isLiveConfigured } from '@/lib/trading-state'
-import { getEngineStatus } from '@/lib/agent-engine'
-
+import { pythonGet } from '@/lib/python-proxy'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-
 export async function GET() {
-  const port = snapshotPortfolio()
-  return NextResponse.json({
-    engine: getEngineStatus(),
-    connected: port.connected,
-    cycle: port.cycle,
-    equity: port.equity,
-    startedAt: port.startedAt,
-    mode: getMode(),
-    liveConfigured: isLiveConfigured(),
-  })
+  const data = await pythonGet('/api/status')
+  return NextResponse.json(data || { engine: { running: false, predictors: 0, sentimentCache: 0 }, connected: false, cycle: 0, equity: 0, startedAt: 0, mode: 'paper', liveConfigured: false })
 }

@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server'
-import { getTicks } from '@/lib/trading-state'
-
+import { pythonGet } from '@/lib/python-proxy'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-
 export async function GET() {
-  return NextResponse.json(getTicks())
+  const data = await pythonGet('/api/ticks')
+  return NextResponse.json(data || [])
 }

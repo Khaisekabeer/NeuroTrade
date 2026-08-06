@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server'
-import { getTrades } from '@/lib/trading-state'
-
+import { pythonGet } from '@/lib/python-proxy'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
-  const limit = Number(searchParams.get('limit') || 50)
-  return NextResponse.json(getTrades(limit))
+  const limit = searchParams.get('limit') || 50
+  const data = await pythonGet(`/api/trades?limit=${limit}`)
+  return NextResponse.json(data || [])
 }

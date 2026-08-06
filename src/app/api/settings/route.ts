@@ -1,24 +1,12 @@
 import { NextResponse } from 'next/server'
-
+import { pythonGet } from '@/lib/python-proxy'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-
-// Read-only settings status. NEVER echo secrets.
 export async function GET() {
+  const data = await pythonGet('/api/status')
   return NextResponse.json({
-    bitget: {
-      apiKey: process.env.BITGET_API_KEY ? 'configured' : 'not-set',
-      apiSecret: process.env.BITGET_API_SECRET ? 'configured' : 'not-set',
-      passphrase: process.env.BITGET_API_PASSPHRASE ? 'configured' : 'not-set',
-      demoTrading: process.env.BITGET_DEMO === 'true',
-    },
-    tradingView: {
-      widgetEnabled: true,
-      note: 'TradingView embedded widget runs client-side; no keys required for the free charting widget.',
-    },
-    agentEngine: {
-      intervalMs: 45000,
-      symbols: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
-    },
+    bitget: { apiKey: data?.liveConfigured ? 'configured' : 'not-set', apiSecret: data?.liveConfigured ? 'configured' : 'not-set', passphrase: data?.liveConfigured ? 'configured' : 'not-set', demoTrading: false },
+    tradingView: { widgetEnabled: true },
+    agentEngine: { intervalMs: 60000, symbols: [] }
   })
 }
