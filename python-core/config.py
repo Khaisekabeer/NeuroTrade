@@ -32,9 +32,12 @@ class Config:
     cycle_seconds: int = 45
     exit_check_seconds: int = 4
 
-    # LLM
-    llm_model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    # LLM Provider
+    llm_provider: str = os.getenv("LLM_PROVIDER", "ollama")  # 'ollama', 'openai', 'deepseek'
+    ollama_url: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "llama3")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
 
     # Modes
     paper: bool = os.getenv("PAPER_MODE", "true").lower() == "true"
