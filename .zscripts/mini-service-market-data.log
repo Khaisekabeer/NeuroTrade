@@ -1,0 +1,58 @@
+[market-data] Installing dependencies...
+bun install v1.3.14 (0d9b296a)
+
++ @types/node@20.19.43
++ @types/socket.io@3.0.2
++ tsx@4.23.0
++ typescript@5.9.3
++ socket.io@4.8.3
+
+29 packages installed [364.00ms]
+[market-data] Runningnode:events:487
+      throw er; // Unnode:events:487
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::3003
+    at Server.setupListenHandle [as _listen2] (node:net:2009:16)
+    at listenInCluster (node:net:2066:12)
+    at Server.listen (node:net:2171:7)
+    at <anonymous> (/home/z/my-project/mini-services/market-data/index.ts:192:12)
+    at Object.<anonymous> (/home/z/my-project/mini-services/market-data/index.ts:194:2)
+    at Module._compile (node:internal/modules/cjs/loader:1871:14)
+    at Object.transformer (/home/z/my-project/mini-services/market-data/node_modules/tsx/dist/register-BLUABhh3.cjs:9:3252)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:2045:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -98,
+  syscall: 'listen',
+  address: ':3:04:42 AM [tsx] unlink in ./index.ts3:04:42 AM [tsx]node:internal/modules/cjs/loader:1520
+  throw err;
+  ^
+
+Error: Cannot find module '/home/z/my-project/mini-services/market-data/node_modules/tsx/dist/preflight.cjs'
+Require stack:
+- internal/preload
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1517:15)
+    at wrapResolveFilename (node:internal/modules/cjs/loader:1071:27)
+    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1095:10)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1122:12)
+    at Module._load (node:internal/modules/cjs/loader:1294:5)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.require (node:internal/modules/cjs/loader:1617:12)
+    at node:internal/modules/cjs/loader:2163:12
+    at loadPreloadModules (node:internal/process/pre_execution:711:5)
+    at initializeModuleLoaders (node:internal/process/pre_execution:243:5) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [ 'internal/preload' ]
+}
+
+Node.js v24.18.0
+ernal/preload' ]
+}
+
+Node.js v24.18.0

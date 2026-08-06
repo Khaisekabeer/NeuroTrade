@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "functions": {
+    "/api/agents": {},
+    "/api/bitget": {},
+    "/api/bitget-symbols": {},
+    "/api/candles": {},
+    "/api/debug": {},
+    "/api/decisions": {},
+    "/api/engine": {},
+    "/api/ml": {},
+    "/api/mode": {},
+    "/api/portfolio": {},
+    "/api/reset": {},
+    "/api/risk": {},
+    "/api/settings": {},
+    "/api/status": {},
+    "/api/symbols": {},
+    "/api/ticks": {},
+    "/api/trade": {},
+    "/api/trades": {}
+  }
+}

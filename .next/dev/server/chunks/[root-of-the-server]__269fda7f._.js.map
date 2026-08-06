@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 4, "column": 0}, "map": {"version":3,"sources":["file:///home/z/my-project/src/lib/db.ts"],"sourcesContent":["import { PrismaClient } from '@prisma/client'\n\nconst globalForPrisma = globalThis as unknown as {\n  prisma: PrismaClient | undefined\n}\n\nexport const db =\n  globalForPrisma.prisma ??\n  new PrismaClient({\n    log: ['error'],\n  })\n\nif (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db\n"],"names":[],"mappings":";;;;AAAA;;AAEA,MAAM,kBAAkB;AAIjB,MAAM,KACX,gBAAgB,MAAM,IACtB,IAAI,sMAAY,CAAC;IACf,KAAK;QAAC;KAAQ;AAChB;AAEF,wCAA2C,gBAAgB,MAAM,GAAG"}}]
+}
